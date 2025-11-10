@@ -99,6 +99,164 @@ class DashboardAPIClient {
 | **User Actions** | REST POST | On interaction | Settings, exports |
 | **Event Stream** | WebSocket | Continuous | Activity timeline |
 
+### WebSocket Real-Time Implementation
+
+The dashboard uses WebSocket for real-time updates from Redis TimeSeries metrics and conversation events.
+
+#### Server-Side WebSocket Handler
+
+```python
+# server/api/websocket.py (pseudocode)
+
+class MetricsWebSocketHandler:
+    """
+    WebSocket handler for real-time metrics streaming.
+    Connects to Redis pub/sub for metric updates.
+    """
+
+    def __init__():
+        """
+        Initialize WebSocket handler.
+
+        - Create Redis connection for pub/sub
+        - Subscribe to metric update channels
+        - Initialize connection pool
+        """
+
+    async def handle_connection(websocket):
+        """
+        Handle WebSocket connection from dashboard.
+
+        Flow:
+        1. Accept WebSocket connection
+        2. Send initial metrics snapshot from Redis (TS.GET all metrics)
+        3. Subscribe to Redis pub/sub channels:
+           - metrics:updates (real-time metric changes)
+           - sessions:active (active session count)
+           - events:stream (recent events for activity timeline)
+        4. Stream updates to client as JSON messages
+        5. Handle disconnection and cleanup
+
+        Message Format:
+        {
+            "type": "metric_update" | "session_update" | "event",
+            "timestamp": "2025-11-09T...",
+            "data": {
+                "metric_name": "acceptance_rate",
+                "value": 0.85,
+                "trend": "+5%"
+            }
+        }
+        """
+
+    async def publish_metrics():
+        """
+        Periodic task to push latest metrics to connected clients.
+
+        - Every 1 second: Query Redis TimeSeries for latest values
+        - For each connected WebSocket: Send metric_update message
+        - Debounce: Only send if value changed since last push
+        """
+
+    async def stream_events():
+        """
+        Stream recent events from Redis Streams to dashboard.
+
+        - Use XREAD on cdc:events stream
+        - Filter for user-visible events (tool_use, code_change)
+        - Push as event messages to dashboard activity timeline
+        """
+```
+
+#### Client-Side WebSocket Integration
+
+```typescript
+// dashboard/src/hooks/useWebSocket.ts (pseudocode)
+
+export const useWebSocket = () => {
+  /**
+   * React hook for WebSocket connection management.
+   *
+   * Features:
+   * - Auto-connect on mount
+   * - Auto-reconnect on disconnect (exponential backoff)
+   * - Dispatch updates to Redux store
+   * - Parse incoming messages by type
+   *
+   * Message handlers:
+   * - metric_update: Update metrics slice in Redux
+   * - session_update: Update active sessions count
+   * - event: Append to activity timeline
+   *
+   * Usage:
+   * const { connected, lastMessage } = useWebSocket();
+   */
+};
+```
+
+#### Redis Integration for Real-Time Updates
+
+The WebSocket server reads from multiple Redis data sources:
+
+```python
+# server/api/realtime_metrics.py (pseudocode)
+
+class RealtimeMetricsProvider:
+    """
+    Provides real-time metrics data from Redis to WebSocket handler.
+    """
+
+    async def get_latest_metrics() -> Dict:
+        """
+        Get latest metric values from Redis TimeSeries.
+
+        - Execute TS.GET for each metric key
+        - Return dict of metric_name -> {value, timestamp}
+
+        Metrics:
+        - metric:realtime:active_sessions
+        - metric:realtime:events_per_second
+        - metric:session:acceptance_rate
+        - metric:session:productivity_score
+        - metric:tools:tool_latency_p95
+        """
+
+    async def subscribe_to_updates(callback):
+        """
+        Subscribe to Redis pub/sub for metric updates.
+
+        - SUBSCRIBE to metrics:updates channel
+        - When message received: Parse and call callback(metric_update)
+        - Callback sends WebSocket message to connected clients
+        """
+
+    async def get_recent_events(limit: int = 50) -> List[Dict]:
+        """
+        Get recent events from SQLite for activity timeline.
+
+        - Query SQLite conversations table for recent turns
+        - Join with code_changes for file modifications
+        - Return list of events with timestamps
+        - ORDER BY timestamp DESC LIMIT limit
+        """
+```
+
+#### Update Frequency and Performance
+
+| Metric Type | Update Frequency | Redis Source | Latency |
+|-------------|------------------|--------------|---------|
+| **Active Sessions** | 1 second | Redis TS.GET | <5ms |
+| **Acceptance Rate** | On event | Redis pub/sub | <10ms |
+| **Events Per Second** | 1 second | Redis TS.GET | <5ms |
+| **Activity Timeline** | On new event | SQLite query | <20ms |
+| **Tool Latency** | 5 seconds | Redis TS.RANGE | <10ms |
+
+**Performance Optimization**:
+- **Debouncing**: WebSocket messages throttled to max 10/second per client
+- **Batching**: Multiple metric updates batched into single WebSocket message
+- **Caching**: Redis values cached for 1 second to reduce TS.GET calls
+- **Selective Updates**: Only send changed metrics to reduce bandwidth
+
 ## UI Components
 
 ### 3.1 Dashboard Layout

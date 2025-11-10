@@ -13,7 +13,7 @@ License-Filename: LICENSE
 
 ## Overview
 
-The local telemetry server uses a **non-blocking async architecture** with separate fast and slow processing paths. The fast path ensures zero-latency raw event capture (<1ms), while async workers handle enrichment, metrics calculation, and AI insights without blocking ingestion. All persistent storage is handled by Layer 2 (Layer 1 only emits events).
+The local telemetry server uses a **non-blocking async architecture** with separate fast and slow processing paths. The fast path ensures low-latency raw event capture (<10ms with compression), while async workers handle enrichment, metrics calculation, and AI insights without blocking ingestion. All persistent storage is handled by Layer 2 (Layer 1 only emits events).
 
 ## Architecture
 
@@ -46,8 +46,7 @@ graph TB
     end
 
     subgraph "Data Stores"
-        DUCK[(DuckDB<br/>Raw Traces)]
-        SQLITE[(SQLite<br/>Conversations)]
+        SQLITE[(SQLite telemetry.db<br/>Raw Traces + Conversations)]
         REDIS[(Redis<br/>Metrics)]
         MAP[(Session Mappings)]
     end
@@ -61,7 +60,7 @@ graph TB
     MQ --> INBOX
     INBOX --> FAST
     FAST --> BATCH
-    BATCH --> DUCK
+    BATCH --> SQLITE
     BATCH --> CDC
     CDC --> STREAM
 
@@ -74,7 +73,7 @@ graph TB
     CW --> ENRICH
     AW --> ENRICH
 
-    ENRICH -.->|Read| DUCK
+    ENRICH -.->|Read| SQLITE
     MW --> REDIS
     CW --> SQLITE
     AW --> SQLITE
@@ -83,11 +82,9 @@ graph TB
     MAPPER --> UUID
     MAPPER --> MAP
 
-    DUCK --> DASH
     SQLITE --> DASH
     REDIS --> DASH
 
-    DUCK --> SYNC
     SQLITE --> SYNC
     REDIS --> SYNC
 
@@ -110,8 +107,8 @@ graph TB
 
 class FastPathConsumer:
     """
-    High-throughput consumer that writes raw events with zero blocking.
-    Target: <1ms per event at P95.
+    High-throughput consumer that writes raw events with minimal blocking.
+    Target: <10ms per batch at P95 (includes zlib compression overhead).
     """
 
     batch_size = 100
@@ -136,9 +133,9 @@ class FastPathConsumer:
 
     async def _flush():
         """
-        Write batch to DuckDB and publish CDC events.
+        Write batch to SQLite (compressed) and publish CDC events.
 
-        - writer.write_batch(batch)  # DuckDB insert, very fast
+        - writer.write_batch(batch)  # SQLite insert with zlib compression
         - For each event: cdc.publish(...)  # Fire-and-forget
         - Clear batch
         """
@@ -338,7 +335,7 @@ class AIInsightsEngine:
 class StorageManager:
     """
     Unified storage interface for all Layer 2 data.
-    Coordinates DuckDB, SQLite, Redis, and hierarchical file storage.
+    Coordinates SQLite (raw traces + conversations), Redis, and hierarchical file storage.
     """
 
     async def store_event(event: dict):

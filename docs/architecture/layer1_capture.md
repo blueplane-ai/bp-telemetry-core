@@ -43,11 +43,11 @@ graph TB
         MQW1 -->|Write| MQ[Message Queue]
         MQW2 -->|Write| MQ
 
-        subgraph "Message Queue System"
-            MQ --> Inbox[Inbox]
-            Inbox --> Processing
-            Processing --> Completed
-            Processing --> DLQ[Dead Letter Queue]
+        subgraph "Message Queue System (Redis Streams)"
+            MQ --> Events[telemetry:events<br/>Stream]
+            Events --> Processors[Consumer Group:<br/>processors]
+            Processors --> CDC[CDC Stream]
+            Events --> DLQ[telemetry:dlq<br/>Dead Letter Queue]
         end
     end
 
@@ -60,58 +60,50 @@ graph TB
 
 ## Shared Components
 
-### 1.1 Message Queue System
+### 1.1 Message Queue System (Redis Streams)
 
-**Location**: `~/.blueplane/mq/`
+**Technology**: Redis Streams
 
-**Directory Structure**:
+**Stream Structure**:
 ```
-~/.blueplane/mq/
-├── inbox/              # New events from hooks
-├── processing/         # Events being processed by Layer 2
-├── completed/          # Successfully processed (rotated daily)
-└── dlq/               # Dead letter queue for failed events
-    └── {timestamp}_{uuid}.json  # Failed events with metadata
+Main Queue: telemetry:events
+  - Consumer Group: processors
+  - Max Length: ~10,000 (approximate trim)
+  - Consumers: fast-path-1, fast-path-2, ...
+
+Dead Letter Queue: telemetry:dlq
+  - No consumer groups (manual inspection)
+  - Retention: 7 days for debugging
 ```
 
-**Event Format**:
+**Message Format** (Redis Stream Entry):
 ```json
 {
-  "meta": {
-    "queue_id": "550e8400-e29b-41d4-a716-446655440000",
-    "enqueued_at": "2025-11-06T15:30:45.123Z",
-    "retry_count": 0,
-    "platform": "claude_code"
-  },
-  "event": {
-    "external_session_id": "6f967aab-03c6-4b94-ba66-9666e81c033b",
-    "hook_type": "SessionStart",
-    "timestamp": "2025-11-06T15:30:45.100Z",
-    "sequence_num": 1,
-    "payload": {
-      "cwd": "/Users/user/project",
-      "source": "startup"
-    }
-  }
+  "event_id": "550e8400-e29b-41d4-a716-446655440000",
+  "enqueued_at": "2025-11-06T15:30:45.123Z",
+  "retry_count": "0",
+  "platform": "claude_code",
+  "external_session_id": "6f967aab-03c6-4b94-ba66-9666e81c033b",
+  "hook_type": "SessionStart",
+  "timestamp": "2025-11-06T15:30:45.100Z",
+  "sequence_num": "1",
+  "data": "{\"cwd\":\"/Users/user/project\",\"source\":\"startup\"}"
 }
 ```
 
-**Dead Letter Queue Entry**:
+**Dead Letter Queue Entry** (telemetry:dlq stream):
 ```json
 {
-  "original_event": { /* ... */ },
-  "error": {
-    "type": "processing_error",
-    "message": "Failed to determine project_id",
-    "stack_trace": "...",
-    "attempted_at": "2025-11-06T15:30:46.123Z",
-    "retry_count": 3
-  },
-  "dlq_metadata": {
-    "queued_at": "2025-11-06T15:30:47.000Z",
-    "can_retry": true,
-    "suggested_action": "check_workspace_path"
-  }
+  "original_event_id": "550e8400-e29b-41d4-a716-446655440000",
+  "original_data": "{...}",
+  "error_type": "processing_error",
+  "error_message": "Failed to determine project_id",
+  "error_stack": "...",
+  "attempted_at": "2025-11-06T15:30:46.123Z",
+  "retry_count": "3",
+  "dlq_queued_at": "2025-11-06T15:30:47.000Z",
+  "can_retry": "true",
+  "suggested_action": "check_workspace_path"
 }
 ```
 
@@ -121,30 +113,79 @@ graph TB
 
 **Location**: `capture-sdk/shared/queue_writer.py`
 
-**Implementation**:
+**Implementation** (pseudocode):
 ```python
 # capture-sdk/shared/queue_writer.py (pseudocode)
 
 class MessageQueueWriter:
-    """Write events to local message queue - shared by all platforms"""
+    """Write events to Redis Streams message queue - shared by all platforms"""
 
-    inbox = Path.home() / ".blueplane" / "mq" / "inbox"
+    def __init__(self):
+        """
+        Initialize Redis connection.
+
+        - Connect to localhost:6379
+        - Use connection pooling
+        - Set socket timeouts (1 second max)
+        - Fail gracefully if Redis unavailable
+        """
 
     def enqueue(event: dict, platform: str, session_id: str) -> bool:
         """
-        Write event to message queue inbox.
+        Write event to Redis Streams telemetry:events.
 
-        - Create message with meta (queue_id, enqueued_at, platform)
-        - Add event with external_session_id
-        - Atomic write: temp file -> rename (prevents partial reads)
+        - Generate event_id (UUID)
+        - Add enqueued_at timestamp
+        - Flatten event dict to Redis hash format
+        - XADD to 'telemetry:events' stream with MAXLEN ~10000
+        - Return true on success, false on failure
         - Fail silently on error (hooks must not block IDE)
+        - Timeout after 1 second
         """
 ```
 
+**Pseudocode Details**:
+```python
+def enqueue(event: dict, platform: str, session_id: str) -> bool:
+    try:
+        # Generate message ID
+        event_id = generate_uuid()
+
+        # Build Redis stream entry (flat key-value pairs)
+        stream_entry = {
+            'event_id': event_id,
+            'enqueued_at': current_timestamp(),
+            'retry_count': '0',
+            'platform': platform,
+            'external_session_id': session_id,
+            'hook_type': event['hook_type'],
+            'timestamp': event['timestamp'],
+            'data': json.dumps(event['payload'])  # Serialize complex data
+        }
+
+        # Write to Redis Streams with auto-trim
+        redis.xadd(
+            name='telemetry:events',
+            fields=stream_entry,
+            maxlen=10000,
+            approximate=True  # Efficient approximate trimming
+        )
+
+        return True
+
+    except (ConnectionError, TimeoutError) as e:
+        # Log error but don't raise (silent failure)
+        # Hooks must never block IDE operations
+        return False
+```
+
 **Features**:
-- Atomic file operations (write to temp, then rename)
+- Atomic Redis XADD operations (guaranteed message delivery)
 - Platform-agnostic interface
 - Silent failure to prevent blocking IDE operations
+- Connection pooling for performance
+- Auto-trim to prevent unbounded growth (MAXLEN ~10000)
+- 1-second timeout for network operations
 - Standardized message format for both platforms
 
 ## Claude Code Implementation
@@ -465,25 +506,34 @@ class UniversalInstaller:
 
     Main workflow:
     1. detect_platforms(): Check for .claude dir, Cursor.app existence
-    2. install_claude():
+    2. install_redis():
+       - Check if Redis is installed (redis-cli --version)
+       - If not found, provide installation instructions
+       - Start Redis server if not running
+       - Create consumer groups: XGROUP CREATE telemetry:events processors
+    3. install_claude():
        - Copy hooks/*.py to ~/.claude/hooks/telemetry/
        - Update ~/.claude/settings.json with hook configuration
-    3. install_cursor():
+       - Update hooks to use Redis connection settings
+    4. install_cursor():
        - Copy hooks/*.py to .cursor/hooks/telemetry/
        - Create .cursor/hooks.json with hook configuration
        - Optionally install VSCode extension
-    4. setup_message_queue():
-       - Create ~/.blueplane/mq/{inbox,processing,completed,dlq}/
+       - Update hooks to use Redis connection settings
     5. configure_privacy():
        - Write ~/.blueplane/config.yaml with privacy settings
     6. verify():
-       - Check all directories and hooks exist
+       - Check Redis is running (redis-cli PING)
+       - Verify consumer groups exist
+       - Check all hooks exist and are configured
        - Display installation status
 
     CLI options:
     --platform [auto|claude|cursor|both]
     --workspace [path]
     --privacy [strict|balanced|development]
+    --redis-host [localhost]
+    --redis-port [6379]
     --dry-run
     """
 ```
@@ -601,8 +651,11 @@ privacy:
 ### Benefits of This Architecture
 
 - **Platform Independence**: Layer 2 doesn't need to know which IDE generated the events
-- **Reliable Delivery**: Message queue pattern ensures events aren't lost
-- **Non-Blocking**: Hooks always exit 0 to prevent IDE disruption
+- **Reliable Delivery**: Redis Streams provides at-least-once delivery with Pending Entries List (PEL)
+- **High Throughput**: 100k+ events/sec capacity with Redis Streams
+- **Automatic Retry**: Stuck messages automatically reclaimed via XCLAIM
+- **Observability**: Built-in monitoring with XINFO and XPENDING commands
+- **Non-Blocking**: Hooks timeout after 1 second to prevent IDE disruption
 - **Privacy First**: All sensitive data is sanitized at capture time
 - **Extensible**: Easy to add support for new IDEs or editors
 

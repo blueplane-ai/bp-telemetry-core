@@ -41,9 +41,9 @@ class ConversationWorker:
         """
         Process CDC event to update conversation structure.
 
-        - Read full event from DuckDB
+        - Read full event from SQLite raw_traces table (decompress event_data)
         - Route to platform-specific reconstruction based on platform field
-        - Update SQLite conversation data with new turn/event
+        - Update SQLite conversation tables with new turn/event
         """
 ```
 
@@ -73,13 +73,14 @@ async def reconstruct_cursor_conversation(session_id: str):
     Executed by ConversationWorker in Layer 2 slow path.
     """
 
-    # 1. Load hook events from DuckDB
-    hook_events = await duckdb.get_session_events(
+    # 1. Load hook events from SQLite raw_traces table
+    hook_events = await sqlite.get_session_events(
         session_id, platform='cursor', order_by='timestamp'
     )
+    # Note: Each event's event_data BLOB is decompressed to get full payload
 
-    # 2. Load database traces from DuckDB
-    db_traces = await duckdb.get_database_traces(
+    # 2. Load database traces from SQLite raw_traces table
+    db_traces = await sqlite.get_database_traces(
         session_id,
         tables=['aiService.prompts', 'aiService.generations', 'composer.composerData']
     )
@@ -187,16 +188,18 @@ async def reconstruct_claude_code_conversation(session_id: str):
     Executed by ConversationWorker in Layer 2 slow path.
     """
 
-    # 1. Load all hook events from DuckDB
-    events = await duckdb.get_session_events(
+    # 1. Load all hook events from SQLite raw_traces table
+    events = await sqlite.get_session_events(
         session_id, platform='claude', order_by='sequence'
     )
+    # Note: Each event's event_data BLOB is decompressed to get full payload
 
     # 2. Get transcript path from SessionStart event
     transcript_path = extract_transcript_path(events)
 
     # 3. Load transcript data if available
-    transcript_data = await duckdb.get_transcript_events(transcript_path) if transcript_path else []
+    transcript_data = await sqlite.get_transcript_events(transcript_path) if transcript_path else []
+    # Note: Transcript events are also stored in raw_traces with decompression
 
     # 4. Build conversation timeline
     conversation = []

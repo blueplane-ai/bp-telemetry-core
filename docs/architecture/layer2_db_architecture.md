@@ -14,7 +14,7 @@ License-Filename: LICENSE
 
 ## Executive Summary
 
-This document specifies the database architecture for Blueplane's local implementation (Layers 1-3). Following the async pipeline pattern from `layer2_async_pipeline.md`, the architecture ensures zero-latency raw trace ingestion while maintaining eventual consistency for derived metrics and conversation data. All databases run locally with no cloud dependencies. Layer 3 interfaces (CLI, MCP, Dashboard) access only processed data from SQLite (conversations) and Redis (metrics), never raw traces from DuckDB.
+This document specifies the database architecture for Blueplane's local implementation (Layers 1-3). Following the async pipeline pattern from `layer2_async_pipeline.md`, the architecture ensures sub-10ms raw trace ingestion while maintaining eventual consistency for derived metrics and conversation data. All databases run locally with no cloud dependencies. The system uses a simplified 2-database architecture: **SQLite** for all persistent data (raw traces and conversations in a single `telemetry.db` file) and **Redis** for real-time metrics and work queues. Layer 3 interfaces (CLI, MCP, Dashboard) access only processed data from SQLite (conversations) and Redis (metrics), never raw traces from the `raw_traces` table.
 
 ## Architecture Overview
 
@@ -30,11 +30,12 @@ This document specifies the database architecture for Blueplane's local implemen
 
 | Data Type | Database | Access Layer | Rationale |
 |-----------|----------|--------------|-----------|
-| **Raw Traces** | DuckDB | Layer 2 Internal Only | In-process OLAP, columnar storage, SQL analytics |
-| **Conversations** | SQLite | Layer 2 & 3 | Embedded, ACID compliant, zero configuration |
-| **Real-Time Metrics** | Redis TimeSeries | Layer 2 & 3 | Sub-millisecond latency, built-in aggregations |
-| **Session Mappings** | SQLite | Layer 2 Only | Lightweight key-value mappings |
-| **Work Queue** | Redis Streams | Layer 2 Internal Only | CDC events, priority queuing |
+| **Raw Traces** | SQLite (`telemetry.db`) | Layer 2 Internal Only | zlib compression (7-10x), zero configuration, WAL mode for concurrency |
+| **Conversations** | SQLite (`telemetry.db`) | Layer 2 & 3 | Same database as raw traces, ACID compliant, relational queries |
+| **Real-Time Metrics** | Redis TimeSeries | Layer 2 & 3 | Sub-millisecond latency, built-in aggregations, automatic expiry |
+| **Session Mappings** | SQLite (`telemetry.db`) | Layer 2 Only | Same database, lightweight key-value mappings |
+| **Message Queue** | Redis Streams | Layer 1 & 2 | Atomic ingestion, at-least-once delivery, consumer groups |
+| **Work Queue** | Redis Streams | Layer 2 Internal Only | CDC events for async workers, PEL-based retry |
 
 ## Data Flow Architecture
 
@@ -46,20 +47,19 @@ graph TB
     end
 
     subgraph "Layer 2: Fast Path"
-        MQ[Message Queue]
+        MQ[Redis Streams<br/>Message Queue]
         CONSUMER[Fast Consumer]
         WRITER[Batch Writer]
         CDC[CDC Publisher]
     end
 
     subgraph "Layer 2: Storage"
-        DUCK[(DuckDB<br/>Raw Traces)]
+        SQLITE[(SQLite telemetry.db<br/>Raw Traces + Conversations)]
         STREAM[Redis Streams<br/>CDC Events]
     end
 
     subgraph "Layer 2: Slow Path"
         WORKERS[Async Workers]
-        SQLITE[(SQLite<br/>Conversations)]
         REDIS[(Redis<br/>Metrics)]
     end
 
@@ -73,13 +73,13 @@ graph TB
     DB_MON --> MQ
     MQ --> CONSUMER
     CONSUMER --> WRITER
-    WRITER --> DUCK
+    WRITER --> SQLITE
     WRITER --> CDC
     CDC --> STREAM
     STREAM --> WORKERS
     WORKERS --> SQLITE
     WORKERS --> REDIS
-    WORKERS -.->|Read| DUCK
+    WORKERS -.->|Read raw_traces| SQLITE
 
     SQLITE --> CLI
     REDIS --> CLI
@@ -96,104 +96,163 @@ graph TB
 
 ## Database Specifications
 
-### 1. DuckDB - Raw Trace Storage (Layer 2 Internal)
+### 1. SQLite - Raw Trace Storage (Layer 2 Internal)
+
+#### Database Configuration
+
+```python
+# storage/sqlite_config.py (pseudocode)
+
+def initialize_database(db_path: str = '~/.blueplane/telemetry.db') -> None:
+    """
+    Initialize SQLite database with optimal settings.
+
+    Configuration:
+    - PRAGMA journal_mode=WAL              # Write-Ahead Logging for concurrency
+    - PRAGMA synchronous=NORMAL            # Balance durability vs speed
+    - PRAGMA cache_size=-64000             # 64MB cache
+    - PRAGMA temp_store=MEMORY             # In-memory temp tables
+    - PRAGMA mmap_size=268435456           # 256MB mmap for reads
+    """
+```
 
 #### Schema Design
 
 ```sql
--- Main raw traces table
+-- Main raw traces table with zlib compression
 CREATE TABLE IF NOT EXISTS raw_traces (
     -- Core identification
-    sequence BIGINT PRIMARY KEY,
-    ingested_at TIMESTAMP NOT NULL,
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    -- Event metadata
+    -- Event metadata (indexed fields)
+    event_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    platform TEXT NOT NULL,
     timestamp TIMESTAMP NOT NULL,
-    event_id VARCHAR DEFAULT (gen_random_uuid()),
-    session_id VARCHAR NOT NULL,
-    event_type VARCHAR NOT NULL,
-    platform VARCHAR NOT NULL,
 
-    -- Context
-    workspace_hash VARCHAR,
-    model VARCHAR,
-    tool_name VARCHAR,
+    -- Context fields
+    workspace_hash TEXT,
+    model TEXT,
+    tool_name TEXT,
 
-    -- Metrics
+    -- Metrics (for fast filtering)
     duration_ms INTEGER,
     tokens_used INTEGER,
     lines_added INTEGER,
     lines_removed INTEGER,
-    error_code VARCHAR,
 
-    -- Payload (compressed JSON)
-    payload JSON,
-    metadata JSON,
+    -- Compressed payload (zlib level 6, achieves 7-10x compression)
+    event_data BLOB NOT NULL,
 
-    -- Computed columns for partitioning
-    event_date DATE GENERATED ALWAYS AS (DATE_TRUNC('day', timestamp)) STORED,
-    event_hour INTEGER GENERATED ALWAYS AS (HOUR(timestamp)) STORED
+    -- Generated columns for partitioning
+    event_date DATE GENERATED ALWAYS AS (DATE(timestamp)),
+    event_hour INTEGER GENERATED ALWAYS AS (CAST(strftime('%H', timestamp) AS INTEGER))
 );
 
--- Indexes for common queries
-CREATE INDEX idx_session_time ON raw_traces(session_id, timestamp);
-CREATE INDEX idx_event_type_time ON raw_traces(event_type, timestamp);
-CREATE INDEX idx_date_hour ON raw_traces(event_date, event_hour);
+-- Indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_session_time ON raw_traces(session_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_event_type_time ON raw_traces(event_type, timestamp);
+CREATE INDEX IF NOT EXISTS idx_date_hour ON raw_traces(event_date, event_hour);
+CREATE INDEX IF NOT EXISTS idx_timestamp ON raw_traces(timestamp DESC);
 
--- Daily statistics table (for fast aggregations)
+-- Daily statistics table (pre-computed aggregations)
 CREATE TABLE IF NOT EXISTS trace_stats (
     stat_date DATE PRIMARY KEY,
-    total_events BIGINT,
-    unique_sessions INTEGER,
-    event_types JSON,
-    platform_breakdown JSON,
-    error_count INTEGER,
-    avg_duration_ms DOUBLE,
-    total_tokens BIGINT
+    total_events INTEGER NOT NULL,
+    unique_sessions INTEGER NOT NULL,
+    event_types TEXT NOT NULL,         -- JSON string
+    platform_breakdown TEXT NOT NULL,  -- JSON string
+    error_count INTEGER DEFAULT 0,
+    avg_duration_ms REAL,
+    total_tokens INTEGER DEFAULT 0,
+    computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
 #### Implementation
 
 ```python
-# storage/duckdb_traces.py (pseudocode)
+# storage/sqlite_traces.py (pseudocode)
 
-class DuckDBTraceStorage:
+import zlib
+import json
+
+class SQLiteTraceStorage:
     """
-    DuckDB storage for raw traces with zero-read fast path.
-    Implements the fast path writer pattern from layer2_async_pipeline.md.
+    SQLite storage for raw traces with zlib compression.
+    Implements fast path writer pattern with batch inserts.
     """
+
+    db_path = '~/.blueplane/telemetry.db'
+    compression_level = 6  # zlib level 6 achieves 7-10x compression
+
+    def __init__():
+        """
+        Initialize database connection.
+
+        - Open connection to db_path
+        - Enable WAL mode and configure PRAGMAs
+        - Create tables if not exist
+        """
 
     def batch_insert(events: List[Dict]) -> None:
         """
-        Fast path batch insert - no reads, just writes.
-        Target: <2ms for 100 events at P95.
+        Fast path batch insert with compression.
+        Target: <8ms for 100 events at P95.
 
-        - Prepare columnar data from events
-        - Single batch INSERT with prepared statement
-        - No commit needed (auto-commit mode)
+        Steps:
+        - For each event:
+            - Extract indexed fields (event_id, session_id, event_type, etc.)
+            - Compress full event data with zlib.compress(json.dumps(event), level=6)
+            - Build row tuple
+        - Execute single INSERT with executemany()
+        - No explicit commit (WAL mode handles concurrency)
         """
 
     def get_by_sequence(sequence: int) -> Dict:
-        """Used by slow path workers to read full event."""
+        """
+        Read single event by sequence (used by slow path workers).
+
+        - SELECT event_data, indexed fields WHERE sequence = ?
+        - Decompress event_data with zlib.decompress()
+        - Parse JSON and merge with indexed fields
+        - Return complete event dict
+        """
 
     def get_session_events(session_id: str, start_time, end_time) -> List[Dict]:
-        """Query events for conversation reconstruction."""
+        """
+        Query events for conversation reconstruction.
+
+        - SELECT WHERE session_id = ? AND timestamp BETWEEN ? AND ?
+        - ORDER BY timestamp ASC
+        - Decompress and parse each event_data
+        - Return list of event dicts
+        """
 
     def calculate_session_metrics(session_id: str) -> Dict:
-        """Calculate aggregated metrics for metrics workers."""
-
-    def archive_old_traces(days_to_keep: int = 7) -> None:
         """
-        Archive old traces to Parquet files.
+        Calculate aggregated metrics for session.
 
-        - Export to Parquet with ZSTD compression
-        - Delete archived data from main table
-        - Update daily statistics
+        - Query raw_traces for session_id
+        - Aggregate: SUM(tokens_used), COUNT(*), SUM(duration_ms), etc.
+        - Return metrics dict (no decompression needed for aggregates)
+        """
+
+    def vacuum_old_traces(days_to_keep: int = 90) -> None:
+        """
+        Delete old traces and reclaim space.
+
+        - DELETE FROM raw_traces WHERE event_date < (today - days_to_keep)
+        - Execute VACUUM to reclaim disk space
+        - Update trace_stats to remove old dates
         """
 ```
 
-### 2. SQLite - Conversation Storage
+### 2. SQLite - Conversation Storage (Same Database)
+
+**Note**: All conversation tables exist in the same `telemetry.db` database as raw traces. This single-file architecture simplifies deployment and backups.
 
 #### Schema Design
 
@@ -283,9 +342,12 @@ CREATE TABLE IF NOT EXISTS session_mappings (
 
 class ConversationStorage:
     """
-    SQLite storage for structured conversation data.
+    SQLite storage for structured conversation data in telemetry.db.
+    Uses same database connection as raw traces.
     Updated by slow path conversation workers.
     """
+
+    db_path = '~/.blueplane/telemetry.db'  # Same database as raw traces
 
     def create_conversation(session_id, external_session_id, platform, workspace_hash) -> str:
         """
@@ -493,11 +555,12 @@ class FastPathIntegration:
 
     async def flush_batch() -> None:
         """
-        Write batch to DuckDB and publish CDC events.
+        Write batch to SQLite and publish CDC events.
 
-        - Call duckdb.batch_insert(batch)  # Synchronous, very fast
+        - Call sqlite.batch_insert(batch)  # Synchronous write with zlib compression
         - For each event: cdc_queue.publish(...)  # Async, fire-and-forget
         - Clear batch
+        - Target: <10ms for 100 events including compression
         """
 
     def calculate_priority(event: Dict) -> int:
@@ -542,7 +605,8 @@ class MetricsWorker(SlowPathWorker):
         """
         Process event to calculate metrics.
 
-        - Read full_event from duckdb.get_by_sequence(sequence)
+        - Read full_event from sqlite.get_by_sequence(sequence)
+        - Decompress event_data to get complete payload
         - Switch on event_type:
             - 'tool_use': Record latency to redis_metrics
             - 'acceptance_decision': Calculate and record acceptance rate
@@ -557,13 +621,14 @@ class ConversationWorker(SlowPathWorker):
         """
         Update conversation from event.
 
-        - Read full_event from DuckDB
-        - Get or create conversation in SQLite
+        - Read full_event from sqlite.get_by_sequence(sequence)
+        - Decompress event_data to get complete payload
+        - Get or create conversation in SQLite conversations table
         - Switch on event_type:
-            - 'user_prompt': Add turn
+            - 'user_prompt': Add turn to conversation_turns
             - 'assistant_response': Add turn with tokens
             - 'tool_use': Update tool_sequence
-            - 'code_change': Track change and update metrics
+            - 'code_change': Track change in code_changes table and update metrics
         """
 ```
 
@@ -623,27 +688,35 @@ class MCPDatabaseAccess:
 
 | Operation | Target P50 | Target P95 | Target P99 |
 |-----------|------------|------------|------------|
-| DuckDB batch insert (100 events) | 1ms | 2ms | 5ms |
-| Redis Stream publish | 0.2ms | 0.5ms | 1ms |
+| SQLite batch insert (100 events, zlib compressed) | 5ms | 10ms | 20ms |
+| Redis Stream publish (XADD) | 0.2ms | 0.5ms | 1ms |
 | SQLite conversation update | 2ms | 5ms | 10ms |
-| Redis metric write | 0.1ms | 0.2ms | 0.5ms |
+| Redis metric write (TS.ADD) | 0.1ms | 0.2ms | 0.5ms |
+
+**Note**: SQLite batch writes include zlib compression overhead (~3-5ms for 100 events). WAL mode allows concurrent reads during writes.
 
 ### Read Performance
 
 | Operation | Target P50 | Target P95 | Target P99 |
 |-----------|------------|------------|------------|
-| DuckDB sequence lookup | 0.5ms | 1ms | 2ms |
-| DuckDB session query | 5ms | 20ms | 50ms |
-| SQLite conversation fetch | 2ms | 10ms | 20ms |
+| SQLite sequence lookup (with decompress) | 1ms | 3ms | 8ms |
+| SQLite session query (decompress multiple) | 10ms | 40ms | 100ms |
+| SQLite conversation fetch (no decompress) | 2ms | 10ms | 20ms |
 | Redis metric range query | 1ms | 5ms | 10ms |
+
+**Note**: Read operations on `raw_traces` table include zlib decompression overhead. Conversation queries access uncompressed structured data.
 
 ### Storage Requirements
 
-| Database | Initial Size | Growth Rate | Retention |
+| Database | Initial Size | Growth Rate (7-10x compression) | Retention |
 |----------|-------------|-------------|-----------|
-| DuckDB | 10MB | ~100MB/day | 7 days active, archive to Parquet |
-| SQLite | 1MB | ~10MB/month | Unlimited |
-| Redis | 50MB | Stable | Time-based expiry |
+| SQLite `telemetry.db` | 5MB | ~14MB/day (raw traces), ~10MB/month (conversations) | 90 days default, configurable |
+| Redis | 50MB | Stable (automatic expiry) | 1 hour to 7 days depending on metric type |
+
+**Compression Efficiency**:
+- **Uncompressed event**: ~1.4KB average
+- **zlib level 6 compressed**: ~200 bytes (7x compression)
+- **Daily volume estimate**: 10,000 events/day = 2MB compressed vs 14MB uncompressed
 
 ## Monitoring and Maintenance
 
@@ -660,9 +733,16 @@ class DatabaseHealthMonitor:
         Run all health checks.
 
         Returns dict with health status for:
-        - duckdb: size_mb, event_count, oldest_event
-        - sqlite: size_mb, conversation_count, integrity
-        - redis: memory_mb, queue_depth, lag_ms
+        - sqlite:
+            - file_size_mb (telemetry.db)
+            - raw_trace_count, conversation_count
+            - oldest_trace_date, newest_trace_date
+            - wal_size_mb, integrity_check
+        - redis:
+            - memory_mb
+            - stream_queue_depth (telemetry:events, cdc:events)
+            - lag_ms (oldest unprocessed message)
+            - timeseries_count
         """
 ```
 
@@ -678,31 +758,41 @@ class MaintenanceTasks:
         """
         Run daily maintenance.
 
-        - Archive old DuckDB traces (days_to_keep=7)
-        - VACUUM SQLite
+        - Delete old raw traces from SQLite (days_to_keep=90)
+        - Checkpoint WAL: PRAGMA wal_checkpoint(TRUNCATE)
         - XTRIM Redis streams (maxlen=100000)
+        - Update trace_stats table with daily aggregations
         """
 
     async def weekly_maintenance() -> None:
         """
         Run weekly maintenance.
 
-        - ANALYZE DuckDB tables
-        - REINDEX SQLite
-        - BGREWRITEAOF Redis
+        - VACUUM SQLite (reclaim space after deletions)
+        - ANALYZE SQLite tables (update query planner statistics)
+        - REINDEX SQLite if needed
+        - BGREWRITEAOF Redis (compact AOF file)
         """
 ```
 
 ## Conclusion
 
-This local database architecture provides:
+This simplified 2-database local architecture provides:
 
-1. **Zero-blocking ingestion** - Fast path writes with no reads
+1. **Sub-10ms ingestion** - Fast path batch writes with zlib compression
 2. **Eventual consistency** - Async enrichment without blocking
 3. **Privacy-first** - All data stays local, raw traces isolated in Layer 2
-4. **Clean separation** - Layer 3 accesses only processed data (SQLite/Redis)
-5. **Efficient storage** - Columnar for analytics, relational for structure
-6. **Real-time metrics** - Sub-millisecond dashboard updates
-7. **Simple deployment** - All databases run locally, no cloud dependencies
+4. **Clean separation** - Layer 3 accesses only processed data (conversations and metrics)
+5. **Efficient storage** - 7-10x zlib compression for raw traces, relational structure for conversations
+6. **Real-time metrics** - Sub-millisecond dashboard updates via Redis TimeSeries
+7. **Simple deployment** - Single SQLite file + Redis, no cloud dependencies
+8. **Zero configuration** - Embedded databases with automatic setup
 
-The architecture follows the async pipeline pattern, ensuring high performance while maintaining data quality and enabling rich analytics capabilities. Raw event data in DuckDB remains internal to Layer 2, with Layer 3 interfaces consuming only enriched, processed data from SQLite and Redis.
+**Key Architecture Benefits**:
+- **Single Database File**: `telemetry.db` contains both raw traces and conversations
+- **At-Least-Once Delivery**: Redis Streams PEL ensures no message loss
+- **Concurrent Access**: SQLite WAL mode allows simultaneous reads and writes
+- **Automatic Compression**: zlib level 6 achieves 7-10x space savings transparently
+- **Simple Backups**: Copy `telemetry.db` file for complete backup
+
+The architecture follows the async pipeline pattern with a simplified technology stack (Redis Streams + SQLite only), ensuring high performance while maintaining data quality and enabling rich analytics capabilities. Raw event data in the `raw_traces` table remains internal to Layer 2, with Layer 3 interfaces consuming only enriched, processed data from SQLite conversations and Redis metrics.

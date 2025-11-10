@@ -27,7 +27,7 @@ Blueplane Telemetry Core is a **privacy-first, local-only telemetry system** for
 ### Design Principles
 
 1. **Privacy-First**: No code content, no cloud transmission, all local storage
-2. **Zero-Latency Ingestion**: Fast path writes with <1ms P95 latency
+2. **Low-Latency Ingestion**: Fast path writes with <10ms P95 latency (compressed batches)
 3. **Eventual Consistency**: Async enrichment doesn't block capture
 4. **Multi-Platform**: Supports Claude Code, Cursor, and extensible to others
 5. **Developer-Friendly**: Rich CLI, MCP integration, and web dashboard
@@ -45,12 +45,11 @@ graph TB
     end
 
     subgraph "Layer 2: Processing"
-        MQ[Message Queue]
+        MQ[Redis Streams<br/>Message Queue]
         FAST[Fast Path<br/>Raw Ingestion]
         SLOW[Slow Path<br/>Async Workers]
-        DUCK[(DuckDB<br/>Raw Traces)]
-        SQLITE[(SQLite<br/>Conversations)]
-        REDIS[(Redis<br/>Metrics)]
+        SQLITE[(SQLite<br/>Raw Traces + Conversations)]
+        REDIS[(Redis<br/>Metrics + CDC)]
     end
 
     subgraph "Layer 3: Interfaces"
@@ -63,11 +62,12 @@ graph TB
     DBMON --> MQ
     TRANSCRIPT --> MQ
     MQ --> FAST
-    FAST --> DUCK
-    FAST --> SLOW
+    FAST --> SQLITE
+    FAST --> REDIS
+    REDIS --> SLOW
     SLOW --> SQLITE
     SLOW --> REDIS
-    SLOW -.->|Read| DUCK
+    SLOW -.->|Read| SQLITE
 
     SQLITE --> CLI
     REDIS --> CLI
@@ -78,6 +78,7 @@ graph TB
 
     style FAST fill:#90EE90
     style SLOW fill:#87CEEB
+    style MQ fill:#FFD700
 ```
 
 ## Layer 1: Capture
@@ -146,24 +147,23 @@ All captured events follow a standard format:
 
 ### Delivery Mechanism
 
-Events are written to a **file-based message queue**:
+Events are written to **Redis Streams**:
 
 ```
-~/.blueplane/mq/
-├── inbox/          # New events
-│   ├── 001.json
-│   ├── 002.json
-│   └── ...
-└── dlq/            # Failed events
-    └── error_*.json
+Redis Stream: "telemetry:events"
+  Consumer Group: "processors"
+    Consumers: fast-path-1, fast-path-2, ...
+
+DLQ Stream: "telemetry:dlq"  # Failed events after max retries
 ```
 
 **Benefits:**
 
-- Atomic writes prevent partial messages
-- Automatic retry via filesystem
-- No network dependency
-- Simple and reliable
+- At-least-once delivery with Pending Entries List (PEL)
+- Automatic retry via XCLAIM for stuck messages
+- Consumer groups for distributed processing
+- Built-in observability (XINFO, XPENDING)
+- 100x throughput vs file-based queue
 
 [**Full Specification →**](./architecture/layer1_capture.md)
 
@@ -175,38 +175,41 @@ Layer 2 implements a **high-performance async pipeline** with separate fast and 
 
 ```mermaid
 graph LR
-    MQ[Message Queue] --> FAST[Fast Path<br/>&lt;1ms]
-    FAST --> DUCK[(DuckDB)]
-    FAST --> CDC[CDC Stream]
-    CDC --> SLOW[Slow Path<br/>Async]
-    SLOW --> SQLITE[(SQLite)]
-    SLOW --> REDIS[(Redis)]
-    SLOW -.->|Read| DUCK
+    MQ[Redis Streams<br/>Message Queue] --> FAST[Fast Path<br/>&lt;10ms]
+    FAST --> SQLITE[(SQLite<br/>Compressed)]
+    FAST --> CDC[Redis CDC<br/>Stream]
+    CDC --> SLOW[Slow Path<br/>Async Workers]
+    SLOW --> SQLITE
+    SLOW --> REDIS[(Redis<br/>Metrics)]
+    SLOW -.->|Read| SQLITE
 
     style FAST fill:#90EE90
     style SLOW fill:#87CEEB
+    style MQ fill:#FFD700
 ```
 
-### Fast Path: Zero-Latency Ingestion
+### Fast Path: Low-Latency Ingestion
 
-**Goal:** Write raw events with zero blocking (<1ms P95)
+**Goal:** Write raw events with minimal blocking (<10ms P95)
 
 **Implementation:**
 
-1. **Poll** message queue (non-blocking)
-2. **Read** and parse JSON events
-3. **Add** sequence number and timestamp
+1. **Read** from Redis Streams (XREADGROUP with blocking)
+2. **Extract** and parse JSON events
+3. **Compress** event payloads with zlib
 4. **Batch** events (100 events or 100ms timeout)
-5. **Write** to DuckDB in single batch
-6. **Publish** CDC events to Redis Streams
-7. **Delete** message files
+5. **Write** to SQLite in single batch (compressed)
+6. **Publish** CDC events to Redis CDC Stream
+7. **Acknowledge** messages (XACK)
 
 **Key Characteristics:**
 
-- Zero database reads (pure writes)
+- Zero database reads (pure writes to SQLite)
+- zlib compression (7-10x storage savings)
 - Batched for efficiency
 - Fire-and-forget CDC publishing
-- Errors logged but don't block
+- Automatic retry via Pending Entries List (PEL)
+- Errors logged but don't block ingestion
 
 ### Slow Path: Async Enrichment
 
@@ -234,17 +237,17 @@ graph LR
 **Processing Pattern:**
 
 1. **Consume** from CDC Redis Stream (XREADGROUP)
-2. **Read** full event from DuckDB by sequence
-3. **Enrich** with context from other databases
+2. **Read** full event from SQLite by sequence (decompress)
+3. **Enrich** with context from same SQLite database
 4. **Calculate** metrics or update conversations
-5. **Write** to SQLite/Redis
+5. **Write** to SQLite (conversations) or Redis (metrics)
 6. **Acknowledge** CDC event (XACK)
 
 [**Full Specification →**](./architecture/layer2_async_pipeline.md)
 
 ## Layer 3: Interfaces
 
-Layer 3 provides **multiple interfaces** for accessing telemetry data. Importantly, Layer 3 only accesses **processed data** from SQLite and Redis, never raw traces from DuckDB.
+Layer 3 provides **multiple interfaces** for accessing telemetry data. Importantly, Layer 3 only accesses **processed data** from SQLite (conversations) and Redis (metrics), never raw traces from SQLite's `raw_traces` table.
 
 ### 3.1 CLI Interface
 
@@ -303,13 +306,16 @@ if metrics["acceptance_rate"] < 0.5:
 
 ### 3.3 Web Dashboard
 
-Real-time visualization and analytics (Phase 2):
+Real-time visualization and analytics:
 
-- Real-time metrics cards
+- **Real-time updates** via WebSocket (100ms latency)
+- Live metrics cards (acceptance rate, productivity)
 - Session timeline visualization
-- Acceptance rate trends
+- Acceptance rate trends over time
 - Tool usage heatmaps
 - AI-powered insights panel
+
+**Technology:** React + WebSocket for live updates from SQLite + Redis
 
 [**Full Specification →**](./architecture/layer3_local_dashboard.md)
 
@@ -321,89 +327,120 @@ Real-time visualization and analytics (Phase 2):
 sequenceDiagram
     participant IDE as IDE/Editor
     participant Hook as Layer 1 Hook
-    participant MQ as Message Queue
+    participant MQ as Redis Streams MQ
     participant Fast as Fast Path
-    participant DuckDB
-    participant CDC as CDC Stream
+    participant SQLite as SQLite (Raw Traces)
+    participant CDC as Redis CDC Stream
     participant Slow as Slow Path Worker
-    participant SQLite
-    participant Redis
+    participant Conv as SQLite (Conversations)
+    participant Metrics as Redis (Metrics)
     participant CLI as Layer 3 CLI
 
     IDE->>Hook: Tool execution event
-    Hook->>MQ: Write JSON to inbox
-    MQ->>Fast: Poll and read
-    Fast->>Fast: Add sequence + timestamp
-    Fast->>DuckDB: Batch insert (100 events)
-    Fast->>CDC: Publish CDC event
-    Fast->>MQ: Delete message file
+    Hook->>MQ: XADD to telemetry:events
+    MQ->>Fast: XREADGROUP (blocking)
+    Fast->>Fast: Compress events
+    Fast->>SQLite: Batch insert (100 events, compressed)
+    Fast->>CDC: XADD to cdc:events
+    Fast->>MQ: XACK message
 
     CDC->>Slow: XREADGROUP (async)
-    Slow->>DuckDB: Read full event
+    Slow->>SQLite: Read full event (decompress)
     Slow->>Slow: Calculate metrics
-    Slow->>Redis: Update metrics
-    Slow->>SQLite: Update conversation
+    Slow->>Metrics: Update time-series
+    Slow->>Conv: Update conversation
     Slow->>CDC: XACK
 
-    CLI->>Redis: Query metrics
-    CLI->>SQLite: Query conversations
-    Redis-->>CLI: Latest metrics
-    SQLite-->>CLI: Conversation data
+    CLI->>Metrics: Query metrics
+    CLI->>Conv: Query conversations
+    Metrics-->>CLI: Latest metrics
+    Conv-->>CLI: Conversation data
 ```
 
 ### Data Isolation
 
-**Important:** Raw traces in DuckDB are **Layer 2 internal only**:
+**Important:** Raw traces in SQLite's `raw_traces` table are **Layer 2 internal only**:
 
-- ✅ Layer 2 fast path **writes** to DuckDB
-- ✅ Layer 2 slow path **reads** from DuckDB for enrichment
-- ❌ Layer 3 interfaces **never access** DuckDB
-- ✅ Layer 3 accesses only **processed data** (SQLite + Redis)
+- ✅ Layer 2 fast path **writes** to SQLite `raw_traces` table
+- ✅ Layer 2 slow path **reads** from `raw_traces` for enrichment
+- ❌ Layer 3 interfaces **never access** `raw_traces` table
+- ✅ Layer 3 accesses only **processed data** (SQLite conversations + Redis metrics)
 
 This ensures:
 
 - Privacy: Raw events stay internal to processing layer
 - Performance: Layer 3 doesn't slow down ingestion
 - Simplicity: Clean API boundaries
+- Single database: All data in one file with table-level access control
 
 ## Database Architecture
 
 ### Storage Technology Selection
 
-| Database   | Purpose           | Access       | Rationale                                |
-| ---------- | ----------------- | ------------ | ---------------------------------------- |
-| **DuckDB** | Raw traces        | Layer 2 only | In-process OLAP, columnar, SQL analytics |
-| **SQLite** | Conversations     | Layer 2 & 3  | Embedded, ACID, relational structure     |
-| **Redis**  | Real-time metrics | Layer 2 & 3  | Sub-ms latency, time-series, pub/sub     |
+| Database   | Purpose                      | Access       | Rationale                                    |
+| ---------- | ---------------------------- | ------------ | -------------------------------------------- |
+| **SQLite** | Raw traces + Conversations   | Layer 2 & 3* | Embedded, ACID, single file, zlib compression |
+| **Redis**  | Message queue + Real-time metrics | Layer 2 & 3  | Streams for MQ, TimeSeries for metrics, CDC  |
 
-### DuckDB: Raw Trace Storage
+_* Layer 3 only accesses conversation tables, not raw_traces table_
+
+### SQLite: Raw Trace Storage (Layer 2 Internal)
+
+**Database**: `~/.blueplane/telemetry.db`
 
 **Schema:**
 
 ```sql
+-- Enable WAL mode for concurrent access
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+
 CREATE TABLE raw_traces (
-    sequence BIGINT PRIMARY KEY,
-    timestamp TIMESTAMP NOT NULL,
-    ingested_at TIMESTAMP NOT NULL,
-    platform TEXT NOT NULL,
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Event identification
+    event_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     event_type TEXT NOT NULL,
-    payload JSON,
-    metadata JSON,
-    -- Indexes for fast queries
-    INDEX idx_session (session_id, timestamp),
-    INDEX idx_type (event_type, timestamp)
+    platform TEXT NOT NULL,
+    timestamp TIMESTAMP NOT NULL,
+
+    -- Context (indexed for fast filtering)
+    workspace_hash TEXT,
+    model TEXT,
+    tool_name TEXT,
+
+    -- Denormalized metrics
+    duration_ms INTEGER,
+    tokens_used INTEGER,
+    lines_added INTEGER,
+    lines_removed INTEGER,
+
+    -- Full event (zlib-compressed JSON blob)
+    event_data BLOB NOT NULL,
+
+    -- Computed columns
+    event_date DATE GENERATED ALWAYS AS (DATE(timestamp)),
+    event_hour INTEGER GENERATED ALWAYS AS (CAST(strftime('%H', timestamp) AS INTEGER))
 );
+
+CREATE INDEX idx_raw_session_time ON raw_traces(session_id, timestamp);
+CREATE INDEX idx_raw_event_type ON raw_traces(event_type, timestamp);
+CREATE INDEX idx_raw_date_hour ON raw_traces(event_date, event_hour);
 ```
 
 **Characteristics:**
 
-- Columnar storage for analytics
-- ZSTD compression (10:1 ratio)
-- Fast analytical queries
-- Auto-archival to Parquet after 7 days
+- zlib compression level 6 (7-10x compression ratio)
+- WAL mode for concurrent read/write
+- Same database file as conversations (table isolation)
+- Auto-archival to Parquet after 90 days (configurable retention)
+- Performance: <10ms P95 for 100-event batch insert
 
-### SQLite: Conversation Storage
+### SQLite: Conversation Storage (Layer 2 & Layer 3)
+
+**Database**: `~/.blueplane/telemetry.db` (same file as raw traces)
 
 **Schema:**
 
@@ -451,18 +488,38 @@ CREATE TABLE code_changes (
 - Full-text search capable
 - ~10MB typical size
 
-### Redis: Real-Time Metrics
+### Redis: Message Queue, CDC, and Metrics
 
 **Data Structures:**
 
+- **Streams (MQ)**: `telemetry:events` - Main message queue with consumer groups
+- **Streams (DLQ)**: `telemetry:dlq` - Dead letter queue for failed messages
+- **Streams (CDC)**: `cdc:events` - Change data capture for worker coordination
 - **TimeSeries**: Metrics with automatic downsampling
-- **Streams**: CDC event distribution
 - **Hash**: Latest metric snapshots
 - **Sorted Sets**: Leaderboards and rankings
 
-**Retention Policies:**
+**Message Queue Streams:**
 
-- 1-hour: Raw time-series data
+```
+Stream: telemetry:events (main queue)
+  - Consumer Group: processors
+  - Max Length: ~10,000 (approximate trim)
+  - Retention: Until processed + 1 hour
+
+Stream: telemetry:dlq (dead letter queue)
+  - No consumer groups
+  - Retention: 7 days for debugging
+
+Stream: cdc:events (change data capture)
+  - Consumer Group: workers
+  - Max Length: ~10,000
+  - Retention: Until processed
+```
+
+**Metrics Retention Policies:**
+
+- 1-hour: Raw time-series data (1-second granularity)
 - 1-day: 1-minute aggregations
 - 7-day: 5-minute aggregations
 - 30-day: 1-hour aggregations
@@ -509,31 +566,34 @@ CREATE TABLE code_changes (
 
 ### Latency Targets
 
-| Component     | Operation                | P50   | P95  | P99   |
-| ------------- | ------------------------ | ----- | ---- | ----- |
-| **Fast Path** | Event ingestion          | 0.5ms | 1ms  | 2ms   |
-| **Fast Path** | Batch write (100 events) | 2ms   | 5ms  | 10ms  |
-| **Slow Path** | Metrics calculation      | 5ms   | 20ms | 50ms  |
-| **Slow Path** | Conversation update      | 10ms  | 50ms | 100ms |
-| **Layer 3**   | CLI query                | 10ms  | 50ms | 100ms |
+| Component     | Operation                | P50   | P95   | P99   |
+| ------------- | ------------------------ | ----- | ----- | ----- |
+| **Fast Path** | Redis XADD (enqueue)     | 0.5ms | 1ms   | 2ms   |
+| **Fast Path** | Batch write (100 events) | 5ms   | 8ms   | 15ms  |
+| **Slow Path** | Metrics calculation      | 5ms   | 20ms  | 50ms  |
+| **Slow Path** | Conversation update      | 10ms  | 50ms  | 100ms |
+| **Layer 3**   | CLI query                | 10ms  | 50ms  | 100ms |
+| **Layer 3**   | WebSocket update         | 50ms  | 100ms | 200ms |
 
 ### Throughput Targets
 
-| Metric                    | Target  | Notes            |
-| ------------------------- | ------- | ---------------- |
-| Fast path events/sec      | 10,000  | Single consumer  |
-| DuckDB writes/sec         | 100,000 | Batched inserts  |
-| Redis metrics updates/sec | 1,000   | 2 workers        |
-| CLI queries/sec           | 100     | Concurrent users |
+| Metric                    | Target  | Notes                     |
+| ------------------------- | ------- | ------------------------- |
+| Fast path events/sec      | 10,000  | Single consumer           |
+| SQLite writes/sec         | 10,000  | Batched inserts (WAL mode) |
+| Redis Streams writes/sec  | 100,000 | Message queue enqueue     |
+| Redis metrics updates/sec | 1,000   | 2-4 workers               |
+| CLI queries/sec           | 100     | Concurrent users          |
 
 ### Resource Usage
 
-| Resource       | Baseline | Under Load | Notes                  |
-| -------------- | -------- | ---------- | ---------------------- |
-| Memory         | 50MB     | 200MB      | Includes all databases |
-| Disk (active)  | 10MB     | 100MB      | 7-day retention        |
-| Disk (archive) | 0MB      | 1GB/month  | Compressed Parquet     |
-| CPU            | <1%      | <5%        | Async processing       |
+| Resource       | Baseline | Under Load | Notes                         |
+| -------------- | -------- | ---------- | ----------------------------- |
+| Memory         | 90MB     | 200MB      | Redis (70MB) + SQLite (20MB)  |
+| Disk (active)  | 14MB     | 140MB      | 7-day retention (compressed)  |
+| Disk (archive) | 0MB      | 1GB/month  | Compressed Parquet            |
+| CPU            | <1%      | <5%        | Async processing              |
+| Processes      | 1        | 1          | Redis daemon only (embedded SQLite) |
 
 ## Deployment Patterns
 
@@ -576,12 +636,12 @@ blueplane team aggregate *.json --output team_dashboard.json
 
 **Core:**
 
-- `duckdb`: Analytical database
-- `sqlite3`: Relational database (built-in)
-- `redis`: Real-time metrics and queuing
+- `sqlite3`: Embedded database for raw traces + conversations (Python stdlib)
+- `redis`: Message queue (Streams) + real-time metrics (TimeSeries)
+- `pyarrow`: Parquet archival only
 - `asyncio`: Async event processing
 - `httpx`: HTTP client
-- `fastapi`: REST API server
+- `fastapi`: REST API server + WebSocket support
 
 **CLI:**
 
@@ -594,7 +654,7 @@ blueplane team aggregate *.json --output team_dashboard.json
 - `mcp`: Model Context Protocol
 - `pydantic`: Data validation
 - `numpy`: Numerical operations
-- `scikit-learn`: ML features
+- `scikit-learn`: ML features (optional)
 
 ## Future Enhancements
 
