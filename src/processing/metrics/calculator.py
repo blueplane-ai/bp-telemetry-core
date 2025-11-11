@@ -18,7 +18,6 @@ Implements all metric categories from layer2_metrics_derivation.md:
 """
 
 import logging
-import time
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
@@ -81,11 +80,8 @@ class MetricsCalculator:
             # Throughput metrics (for all events)
             metrics.extend(self._calculate_throughput_metrics(event))
 
-            # Update composite metrics periodically (time-based sampling)
-            # Calculate when timestamp ends in 0 (roughly every 10 seconds)
-            # Note: This is time-based, not event-based, for efficiency
-            if int(time.time()) % 10 == 0:
-                metrics.extend(self._calculate_composite_metrics(session_id))
+            # Note: Composite metrics are now calculated by a background task in server.py
+            # This avoids performance overhead and worker coordination issues
 
         except Exception as e:
             logger.error(f"Error calculating metrics for event {event.get('event_id')}: {e}")

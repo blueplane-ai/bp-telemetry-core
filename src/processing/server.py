@@ -26,6 +26,9 @@ from .slow_path.worker_pool import WorkerPoolManager
 from .cursor.session_monitor import SessionMonitor
 from .cursor.database_monitor import CursorDatabaseMonitor
 from .claude_code.transcript_monitor import ClaudeCodeTranscriptMonitor
+from .metrics.shared_state import SharedMetricsState
+from .metrics.calculator import MetricsCalculator
+from .metrics.redis_metrics import RedisMetricsStorage
 from ..capture.shared.config import Config
 
 logger = logging.getLogger(__name__)
@@ -63,6 +66,10 @@ class TelemetryServer:
         self.session_monitor: Optional[SessionMonitor] = None
         self.cursor_monitor: Optional[CursorDatabaseMonitor] = None
         self.claude_code_monitor: Optional[ClaudeCodeTranscriptMonitor] = None
+        self.composite_metrics_task: Optional[asyncio.Task] = None
+        self.shared_state: Optional[SharedMetricsState] = None
+        self.metrics_calculator: Optional[MetricsCalculator] = None
+        self.metrics_storage: Optional[RedisMetricsStorage] = None
         self.running = False
 
     def _initialize_database(self) -> None:
@@ -199,6 +206,52 @@ class TelemetryServer:
 
         logger.info("Worker pool initialized")
 
+    def _initialize_metrics(self) -> None:
+        """Initialize metrics components for composite metrics calculation."""
+        logger.info("Initializing metrics components")
+
+        # Create shared state and calculator
+        self.shared_state = SharedMetricsState(self.redis_client)
+        self.metrics_calculator = MetricsCalculator(self.shared_state)
+        self.metrics_storage = RedisMetricsStorage(self.redis_client)
+        self.metrics_storage.initialize()
+
+        logger.info("Metrics components initialized")
+
+    async def _composite_metrics_updater(self) -> None:
+        """
+        Background task that updates composite metrics every 30 seconds.
+
+        This runs independently of event processing to avoid performance overhead
+        and worker coordination issues. Composite metrics (productivity score)
+        are global aggregates that don't need per-event calculation.
+        """
+        logger.info("Starting composite metrics updater (30 second interval)")
+
+        while self.running:
+            try:
+                # Calculate composite metrics
+                # Note: session_id is empty string since productivity score is global
+                metrics = self.metrics_calculator._calculate_composite_metrics("")
+
+                # Record to Redis
+                for metric in metrics:
+                    self.metrics_storage.record_metric(
+                        metric['category'],
+                        metric['name'],
+                        metric['value']
+                    )
+
+                logger.debug(f"Updated composite metrics: {len(metrics)} metrics recorded")
+
+            except Exception as e:
+                logger.error(f"Failed to update composite metrics: {e}")
+
+            # Wait 30 seconds before next update
+            await asyncio.sleep(30)
+
+        logger.info("Composite metrics updater stopped")
+
     async def start(self) -> None:
         """Start the server."""
         if self.running:
@@ -215,6 +268,15 @@ class TelemetryServer:
             self._initialize_worker_pool()
             self._initialize_cursor_monitor()
             self._initialize_claude_code_monitor()
+            self._initialize_metrics()
+
+            # Mark as running before starting background tasks
+            self.running = True
+
+            # Start composite metrics updater
+            self.composite_metrics_task = asyncio.create_task(
+                self._composite_metrics_updater()
+            )
 
             # Start monitors (if enabled) - runs concurrently
             if self.session_monitor and self.cursor_monitor:
@@ -229,7 +291,6 @@ class TelemetryServer:
                 await self.worker_pool.start()
 
             # Start consumer (this blocks)
-            self.running = True
             await self.consumer.run()
 
         except Exception as e:
@@ -243,6 +304,14 @@ class TelemetryServer:
 
         logger.info("Stopping server...")
         self.running = False
+
+        # Stop composite metrics updater
+        if self.composite_metrics_task:
+            self.composite_metrics_task.cancel()
+            try:
+                await self.composite_metrics_task
+            except asyncio.CancelledError:
+                logger.info("Composite metrics updater cancelled")
 
         if self.claude_code_monitor:
             await self.claude_code_monitor.stop()
