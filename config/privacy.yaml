@@ -3,100 +3,21 @@
 # License-Filename: LICENSE
 
 # Privacy Configuration for Blueplane Telemetry Core
-# Defines what data is captured and how it's sanitized
+#
+# NOTE: This is a minimal configuration for initial implementation.
+# Full privacy controls and sanitization will be implemented in Layer 2.
+# See docs/architecture/layer2_async_pipeline.md for details.
 
 privacy:
-  # Privacy mode: strict | balanced | development
-  # - strict: Maximum privacy, minimal data capture
-  # - balanced: Reasonable privacy with useful metrics
-  # - development: More detailed logging for debugging
-  mode: strict
-
-  # Data sanitization rules
-  sanitization:
-    # Hash file paths instead of storing them
-    hash_file_paths: true
-
-    # Hash workspace/project paths
-    hash_workspace: true
-
-    # Redact error messages and stack traces
-    redact_errors: true
-
-    # Remove all code content from events
-    remove_code_content: true
-
-    # Hash function to use (sha256 | blake2b)
-    hash_algorithm: sha256
-
-    # Truncate hash to first N characters (0 = full hash)
-    hash_truncate_length: 16
-
   # Data categories to opt out of capturing
+  # Currently supported in hooks:
   opt_out:
-    # User prompt text content (metadata only)
-    - user_prompts
+    - file_paths      # Hash file paths instead of storing
+    - error_messages  # Redact error messages to error type only
 
-    # File contents
-    - file_contents
-
-    # Error messages and stack traces
-    - error_messages
-
-    # Git commit messages
-    - commit_messages
-
-    # Environment variables
-    - environment_variables
-
-  # What metadata IS captured (privacy-safe)
-  allowed_metadata:
-    - file_extensions
-    - event_timestamps
-    - tool_names
-    - model_names
-    - duration_metrics
-    - token_counts
-    - line_counts
-    - acceptance_decisions
-    - session_ids
-    - platform_info
-
-  # Data retention policies
-  retention:
-    # Days to keep local raw traces
-    local_days: 90
-
-    # Days before archiving to Parquet
-    archive_after_days: 30
-
-    # Days to keep in DLQ
-    dlq_days: 7
-
-    # Auto-cleanup enabled
-    auto_cleanup: true
-
-  # Workspace/project identification
-  workspace:
-    # Use hash instead of path
-    use_hash: true
-
-    # Include git branch name (hashed)
-    include_git_branch: true
-
-    # Include git remote (hashed)
-    include_git_remote: false
-
-  # Compliance settings
-  compliance:
-    # GDPR compliance mode
-    gdpr_mode: true
-
-    # Allow data export
-    allow_export: true
-
-    # Allow data deletion
-    allow_deletion: true
-
-    # Require explicit consent
-    require_consent: false
+  # NOTE: Future implementation (Layer 2):
+  # - Comprehensive data sanitization
+  # - Content redaction
+  # - Data retention policies
+  # - GDPR compliance features
+  # - Export and deletion capabilities

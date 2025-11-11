@@ -1,12 +1,13 @@
 {
   "$schema": "https://cursor.sh/hooks-schema.json",
   "version": 1,
-  "description": "Blueplane Telemetry Core - Cursor Hooks Configuration",
+  "description": "Blueplane Telemetry Core - Cursor Global Hooks Configuration",
   "hooks": {
     "beforeSubmitPrompt": [
       {
-        "command": "hooks/before_submit_prompt.py",
+        "command": "python3",
         "args": [
+          "~/.cursor/hooks/before_submit_prompt.py",
           "--workspace-root",
           "${workspaceRoot}",
           "--generation-id",
@@ -20,8 +21,9 @@
     ],
     "afterAgentResponse": [
       {
-        "command": "hooks/after_agent_response.py",
+        "command": "python3",
         "args": [
+          "~/.cursor/hooks/after_agent_response.py",
           "--generation-id",
           "${generationId}",
           "--response-length",
@@ -39,8 +41,9 @@
     ],
     "beforeMCPExecution": [
       {
-        "command": "hooks/before_mcp_execution.py",
+        "command": "python3",
         "args": [
+          "~/.cursor/hooks/before_mcp_execution.py",
           "--tool-name",
           "${toolName}",
           "--input-size",
@@ -54,8 +57,9 @@
     ],
     "afterMCPExecution": [
       {
-        "command": "hooks/after_mcp_execution.py",
+        "command": "python3",
         "args": [
+          "~/.cursor/hooks/after_mcp_execution.py",
           "--tool-name",
           "${toolName}",
           "--success",
@@ -73,8 +77,9 @@
     ],
     "afterFileEdit": [
       {
-        "command": "hooks/after_file_edit.py",
+        "command": "python3",
         "args": [
+          "~/.cursor/hooks/after_file_edit.py",
           "--file-extension",
           "${fileExtension}",
           "--lines-added",
@@ -92,8 +97,9 @@
     ],
     "beforeShellExecution": [
       {
-        "command": "hooks/before_shell_execution.py",
+        "command": "python3",
         "args": [
+          "~/.cursor/hooks/before_shell_execution.py",
           "--command-length",
           "${commandLength}",
           "--generation-id",
@@ -105,8 +111,9 @@
     ],
     "afterShellExecution": [
       {
-        "command": "hooks/after_shell_execution.py",
+        "command": "python3",
         "args": [
+          "~/.cursor/hooks/after_shell_execution.py",
           "--exit-code",
           "${exitCode}",
           "--duration-ms",
@@ -120,8 +127,9 @@
     ],
     "beforeReadFile": [
       {
-        "command": "hooks/before_read_file.py",
+        "command": "python3",
         "args": [
+          "~/.cursor/hooks/before_read_file.py",
           "--file-extension",
           "${fileExtension}",
           "--file-size",
@@ -133,8 +141,9 @@
     ],
     "stop": [
       {
-        "command": "hooks/stop.py",
+        "command": "python3",
         "args": [
+          "~/.cursor/hooks/stop.py",
           "--session-duration-ms",
           "${sessionDurationMs}"
         ],
@@ -142,10 +151,6 @@
         "timeout": 1000
       }
     ]
-  },
-  "environment": {
-    "CURSOR_SESSION_ID": "${sessionId}",
-    "CURSOR_WORKSPACE_HASH": "${workspaceHash}"
   },
   "settings": {
     "failOnError": false,

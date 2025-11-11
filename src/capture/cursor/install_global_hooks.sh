@@ -52,6 +52,10 @@ echo "Copying session event sender..."
 cp "$SCRIPT_DIR/send_session_event.py" "$CURSOR_HOOKS_DIR/send_session_event.py"
 chmod +x "$CURSOR_HOOKS_DIR/send_session_event.py"
 
+# Copy hooks.json configuration
+echo "Copying hooks.json configuration..."
+cp "$SCRIPT_DIR/hooks.json" "$HOME/.cursor/hooks.json"
+
 echo ""
 echo "✅ Global hooks installed successfully!"
 echo ""
