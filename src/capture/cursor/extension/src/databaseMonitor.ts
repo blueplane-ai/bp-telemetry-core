@@ -238,20 +238,20 @@ export class DatabaseMonitor {
         ? JSON.parse(gen.value)
         : gen.value;
 
-      // Create trace event
+      // Create trace event (use snake_case for consistency with Python hooks)
       const event: TelemetryEvent = {
         hookType: 'DatabaseTrace',
         eventType: 'database_trace',
         timestamp: new Date().toISOString(),
         payload: {
-          traceType: 'generation',
-          generationId: gen.uuid,
-          dataVersion: gen.data_version,
+          trace_type: 'generation',
+          generation_id: gen.uuid,
+          data_version: gen.data_version,
           model: value.model,
-          tokensUsed: value.tokensUsed || value.completionTokens,
+          tokens_used: value.tokensUsed || value.completionTokens,
         },
         metadata: {
-          workspaceHash: session.workspaceHash,
+          workspace_hash: session.workspaceHash,
         },
       };
 

@@ -187,7 +187,7 @@ export class SessionManager {
       return;
     }
 
-    // Build session event
+    // Build session event (use snake_case for consistency with Python hooks)
     const event = {
       hookType: 'session',
       eventType: `session_${eventType}`,

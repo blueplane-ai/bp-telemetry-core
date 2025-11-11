@@ -94,6 +94,17 @@ class CursorHookBase:
                 # Silent failure - don't block IDE
                 pass
 
+    def _get_workspace_path(self) -> str:
+        """
+        Get workspace path.
+
+        Uses workspace_root if provided by Cursor, otherwise falls back to cwd.
+
+        Returns:
+            Workspace path
+        """
+        return self.workspace_root if self.workspace_root else os.getcwd()
+
     def _get_session_id(self) -> Optional[str]:
         """
         Get session ID from environment variable or extension file.
@@ -118,8 +129,8 @@ class CursorHookBase:
         import hashlib
 
         # Try workspace-specific session file first
-        # Compute workspace hash from current working directory
-        workspace_path = os.getcwd()
+        # Use workspace_root argument if available, otherwise fall back to cwd
+        workspace_path = self._get_workspace_path()
         workspace_hash = hashlib.sha256(workspace_path.encode()).hexdigest()[:16]
 
         workspace_session_file = Path.home() / '.blueplane' / 'cursor-session' / f'{workspace_hash}.json'
@@ -175,7 +186,8 @@ class CursorHookBase:
         import hashlib
 
         # Try workspace-specific session file first
-        workspace_path = os.getcwd()
+        # Use workspace_root argument if available, otherwise fall back to cwd
+        workspace_path = self._get_workspace_path()
         computed_hash = hashlib.sha256(workspace_path.encode()).hexdigest()[:16]
 
         workspace_session_file = Path.home() / '.blueplane' / 'cursor-session' / f'{computed_hash}.json'
@@ -215,6 +227,8 @@ class CursorHookBase:
         """
         Parse command-line arguments.
 
+        Automatically saves workspace_root to self.workspace_root if present.
+
         Args:
             args_spec: Dictionary of argument specifications
                       Format: {arg_name: {type: str, help: str, default: None}}
@@ -237,7 +251,13 @@ class CursorHookBase:
                 default=arg_default
             )
 
-        return parser.parse_args()
+        args = parser.parse_args()
+
+        # Save workspace_root for hash computation if provided
+        if hasattr(args, 'workspace_root') and args.workspace_root:
+            self.workspace_root = args.workspace_root
+
+        return args
 
     def build_event(
         self,

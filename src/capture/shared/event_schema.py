@@ -76,6 +76,10 @@ class HookType(str, Enum):
     BEFORE_READ_FILE = "beforeReadFile"
     CURSOR_STOP = "stop"
 
+    # Extension-generated events (not actual hooks)
+    SESSION = "session"
+    DATABASE_TRACE = "DatabaseTrace"
+
 
 @dataclass
 class EventMetadata:

@@ -20,7 +20,7 @@ from pathlib import Path
 # Add shared modules to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from shared.queue_writer import QueueWriter
+from shared.queue_writer import MessageQueueWriter
 from shared.event_schema import EventType
 
 
@@ -59,8 +59,8 @@ def send_session_event(event_type: str, workspace_path: str, session_id: str, wo
     }
 
     # Write to queue
-    queue_writer = QueueWriter()
-    success = queue_writer.enqueue(session_id, event)
+    queue_writer = MessageQueueWriter()
+    success = queue_writer.enqueue(event, 'cursor', session_id)
 
     return success
 
