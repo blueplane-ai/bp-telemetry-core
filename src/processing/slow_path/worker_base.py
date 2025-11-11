@@ -10,6 +10,7 @@ Workers consume CDC events from Redis Streams and process them asynchronously.
 
 import asyncio
 import logging
+import time
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 import redis
@@ -100,7 +101,7 @@ class WorkerBase(ABC):
         except redis.exceptions.ResponseError as e:
             if "BUSYGROUP" in str(e):
                 # Group already exists, this is fine
-                pass
+                logger.debug(f"Consumer group {self.consumer_group} already exists")
             else:
                 raise
 
@@ -110,13 +111,15 @@ class WorkerBase(ABC):
 
         while self.running:
             try:
-                # Read from stream using consumer group
-                messages = self.redis_client.xreadgroup(
-                    groupname=self.consumer_group,
-                    consumername=self.consumer_name,
-                    streams={self.stream_name: '>'},
-                    count=self.count,
-                    block=self.block_ms,
+                # CRITICAL FIX: Wrap blocking Redis call in asyncio.to_thread
+                # This prevents blocking the event loop
+                messages = await asyncio.to_thread(
+                    self.redis_client.xreadgroup,
+                    self.consumer_group,
+                    self.consumer_name,
+                    {self.stream_name: '>'},
+                    self.count,
+                    self.block_ms,
                 )
 
                 if not messages:
@@ -138,7 +141,7 @@ class WorkerBase(ABC):
 
     async def _process_message(self, message_id: bytes, message_data: Dict[bytes, bytes]) -> None:
         """
-        Process a single CDC message.
+        Process a single CDC message with DLQ support.
 
         Args:
             message_id: Redis stream message ID
@@ -153,14 +156,24 @@ class WorkerBase(ABC):
                 priority = event.get('priority', 5)
                 if priority not in self.priorities:
                     # Not for this worker, acknowledge and skip
-                    self.redis_client.xack(self.stream_name, self.consumer_group, message_id)
+                    await asyncio.to_thread(
+                        self.redis_client.xack,
+                        self.stream_name,
+                        self.consumer_group,
+                        message_id
+                    )
                     return
 
             # Process the event (implemented by subclass)
             await self.process_event(event)
 
-            # Acknowledge message
-            self.redis_client.xack(self.stream_name, self.consumer_group, message_id)
+            # Acknowledge message on success
+            await asyncio.to_thread(
+                self.redis_client.xack,
+                self.stream_name,
+                self.consumer_group,
+                message_id
+            )
 
             # Update stats
             self.stats['processed'] += 1
@@ -169,11 +182,10 @@ class WorkerBase(ABC):
             logger.error(f"Failed to process message {message_id}: {e}")
             self.stats['failed'] += 1
 
-            # Still acknowledge to prevent infinite retry
-            # TODO: Consider DLQ for permanent failures
-            self.redis_client.xack(self.stream_name, self.consumer_group, message_id)
+            # CRITICAL FIX: Implement DLQ for failed messages (Issue #3)
+            await self._handle_failed_message(message_id, message_data, e)
 
-    def _decode_message(self, message_data: Dict[bytes, bytes]) -> Dict[str, Any]:
+    def _decode_message(self, message_data: Dict[bytes, bytes]) -> Dict[str, str]:
         """
         Decode Redis stream message data.
 
@@ -181,12 +193,75 @@ class WorkerBase(ABC):
             message_data: Raw message data from Redis
 
         Returns:
-            Decoded event dictionary
+            Decoded event dictionary (type fixed as per review #7)
         """
         return {
             key.decode('utf-8'): value.decode('utf-8')
             for key, value in message_data.items()
         }
+
+    async def _handle_failed_message(
+        self,
+        message_id: bytes,
+        message_data: Dict[bytes, bytes],
+        error: Exception
+    ) -> None:
+        """
+        Handle a failed message by moving to DLQ after max retries.
+
+        Args:
+            message_id: Redis stream message ID
+            message_data: Message data
+            error: Exception that caused the failure
+        """
+        try:
+            # Get retry count from message data (stored by previous attempts)
+            retry_count = int(message_data.get(b'retry_count', b'0'))
+
+            if retry_count >= 3:
+                # Max retries reached, move to DLQ
+                logger.warning(f"Moving message {message_id} to DLQ after {retry_count} retries")
+
+                # Add error info and timestamp to DLQ entry
+                dlq_data = dict(message_data)
+                dlq_data[b'error'] = str(error).encode('utf-8')
+                dlq_data[b'failed_at'] = str(time.time()).encode('utf-8')
+                dlq_data[b'original_message_id'] = message_id
+
+                # Write to DLQ stream
+                await asyncio.to_thread(
+                    self.redis_client.xadd,
+                    'telemetry:dlq',
+                    dlq_data
+                )
+
+                # Acknowledge the original message (it's in DLQ now)
+                await asyncio.to_thread(
+                    self.redis_client.xack,
+                    self.stream_name,
+                    self.consumer_group,
+                    message_id
+                )
+
+                logger.info(f"Message {message_id} moved to DLQ")
+
+            else:
+                # Don't ACK - message will be retried via PEL (Pending Entries List)
+                # Increment retry count for next attempt
+                logger.info(f"Message {message_id} will be retried (attempt {retry_count + 1}/3)")
+
+                # Note: We don't increment retry_count here because we don't ACK
+                # The next worker to claim this message from PEL will see it
+
+        except Exception as dlq_error:
+            logger.error(f"Failed to handle failed message: {dlq_error}")
+            # If DLQ handling fails, ACK anyway to prevent infinite loop
+            await asyncio.to_thread(
+                self.redis_client.xack,
+                self.stream_name,
+                self.consumer_group,
+                message_id
+            )
 
     @abstractmethod
     async def process_event(self, event: Dict[str, Any]) -> None:

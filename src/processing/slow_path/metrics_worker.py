@@ -69,7 +69,12 @@ class MetricsWorker(WorkerBase):
 
         self.sqlite_client = sqlite_client
         self.metrics_storage = RedisMetricsStorage(redis_client)
-        self.calculator = MetricsCalculator()
+
+        # CRITICAL FIX: Use SharedMetricsState instead of in-memory state
+        # This ensures accurate metrics across multiple workers
+        from ..metrics.shared_state import SharedMetricsState
+        self.shared_state = SharedMetricsState(redis_client)
+        self.calculator = MetricsCalculator(self.shared_state)
 
         # Initialize metrics storage
         self.metrics_storage.initialize()

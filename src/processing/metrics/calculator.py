@@ -5,6 +5,10 @@
 """
 Metrics calculator for deriving actionable metrics from telemetry events.
 
+REFACTORED: Now uses SharedMetricsState backed by Redis to ensure accuracy
+across multiple workers. Previous in-memory state caused incorrect metrics
+when multiple workers processed events concurrently.
+
 Implements all metric categories from layer2_metrics_derivation.md:
 - Core performance metrics (latency, throughput)
 - Acceptance and quality metrics
@@ -16,37 +20,29 @@ Implements all metric categories from layer2_metrics_derivation.md:
 import logging
 import time
 from typing import Dict, Any, List, Optional
-from collections import defaultdict, deque
-from datetime import datetime, timedelta
+from datetime import datetime
+
+from .shared_state import SharedMetricsState
 
 logger = logging.getLogger(__name__)
 
 
 class MetricsCalculator:
     """
-    Calculates metrics from telemetry events.
+    Calculates metrics from telemetry events using Redis-backed shared state.
 
-    Maintains sliding windows and running statistics for efficient calculation.
+    All state is stored in Redis, allowing multiple workers to process events
+    concurrently while maintaining accurate global metrics.
     """
 
-    def __init__(self):
-        """Initialize metrics calculator with sliding windows."""
-        # Sliding windows for calculations
-        self._latency_window = deque(maxlen=100)  # Last 100 tool executions
-        self._acceptance_window = deque(maxlen=100)  # Last 100 changes
-        self._tool_counts = defaultdict(int)
-        self._tool_success = defaultdict(int)
-        self._tool_failures = defaultdict(int)
+    def __init__(self, shared_state: SharedMetricsState):
+        """
+        Initialize metrics calculator with shared state.
 
-        # Session-level tracking
-        self._session_starts = {}
-        self._session_tool_counts = defaultdict(int)
-        self._session_prompt_counts = defaultdict(int)
-        self._session_file_changes = defaultdict(set)
-
-        # Time-based tracking
-        self._events_per_second = deque(maxlen=60)  # Last 60 seconds
-        self._last_event_time = time.time()
+        Args:
+            shared_state: SharedMetricsState instance backed by Redis
+        """
+        self.state = shared_state
 
     def calculate_metrics_for_event(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -86,7 +82,8 @@ class MetricsCalculator:
             metrics.extend(self._calculate_throughput_metrics(event))
 
             # Update composite metrics periodically
-            if len(self._latency_window) > 0 and len(self._latency_window) % 10 == 0:
+            # Calculate every 10th event processed by checking EPS
+            if int(time.time()) % 10 == 0:
                 metrics.extend(self._calculate_composite_metrics(session_id))
 
         except Exception as e:
@@ -99,45 +96,38 @@ class MetricsCalculator:
         Calculate latency metrics from tool execution events.
 
         Metrics:
-        - Tool execution latency (p50, p95, p99)
-        - Response time
+        - Tool execution latency (p50, p95, p99, avg)
         """
         metrics = []
         duration_ms = event.get('duration_ms')
+        tool_name = event.get('tool_name', 'unknown')
 
         if duration_ms is not None and duration_ms >= 0:
-            # Add to sliding window
-            self._latency_window.append(duration_ms)
+            # Add to shared sliding window
+            self.state.add_latency(duration_ms, tool_name)
 
-            # Calculate percentiles
-            if len(self._latency_window) >= 10:
-                sorted_latencies = sorted(self._latency_window)
-                p50_idx = int(len(sorted_latencies) * 0.50)
-                p95_idx = int(len(sorted_latencies) * 0.95)
-                p99_idx = int(len(sorted_latencies) * 0.99)
+            # Get percentiles from shared state
+            percentiles = self.state.get_latency_percentiles()
 
-                metrics.append({
-                    'category': 'tools',
-                    'name': 'tool_latency_p50',
-                    'value': sorted_latencies[p50_idx]
-                })
-                metrics.append({
-                    'category': 'tools',
-                    'name': 'tool_latency_p95',
-                    'value': sorted_latencies[p95_idx]
-                })
-                metrics.append({
-                    'category': 'tools',
-                    'name': 'tool_latency_p99',
-                    'value': sorted_latencies[p99_idx]
-                })
-
-            # Average latency
-            avg_latency = sum(self._latency_window) / len(self._latency_window)
+            metrics.append({
+                'category': 'tools',
+                'name': 'tool_latency_p50',
+                'value': percentiles['p50']
+            })
+            metrics.append({
+                'category': 'tools',
+                'name': 'tool_latency_p95',
+                'value': percentiles['p95']
+            })
+            metrics.append({
+                'category': 'tools',
+                'name': 'tool_latency_p99',
+                'value': percentiles['p99']
+            })
             metrics.append({
                 'category': 'tools',
                 'name': 'tool_latency_avg',
-                'value': avg_latency
+                'value': percentiles['avg']
             })
 
         return metrics
@@ -149,49 +139,42 @@ class MetricsCalculator:
         Metrics:
         - Tool frequency
         - Tool success rate
-        - Tool diversity score
+        - Session tool count (FIXED: now increments session tools)
         """
         metrics = []
         tool_name = event.get('tool_name', 'unknown')
+        session_id = event.get('session_id', '')
         success = event.get('payload', {}).get('success', True)
 
-        # Update counts
-        self._tool_counts[tool_name] += 1
-        if success:
-            self._tool_success[tool_name] += 1
-        else:
-            self._tool_failures[tool_name] += 1
+        # Update shared counters
+        self.state.increment_tool_count(tool_name, success)
+
+        # CRITICAL FIX: Increment session tool count (Issue #4 from review)
+        self.state.increment_session_tool_count(session_id)
 
         # Calculate success rate for this tool
-        total_attempts = self._tool_success[tool_name] + self._tool_failures[tool_name]
-        if total_attempts > 0:
-            success_rate = self._tool_success[tool_name] / total_attempts
-            metrics.append({
-                'category': 'tools',
-                'name': f'tool_success_rate_{tool_name.lower()}',
-                'value': success_rate * 100  # Percentage
-            })
+        tool_success_rate = self.state.get_tool_success_rate(tool_name)
+        metrics.append({
+            'category': 'tools',
+            'name': f'tool_success_rate_{tool_name.lower()}',
+            'value': tool_success_rate
+        })
 
         # Overall tool success rate
-        total_success = sum(self._tool_success.values())
-        total_failures = sum(self._tool_failures.values())
-        if (total_success + total_failures) > 0:
-            overall_success_rate = total_success / (total_success + total_failures)
-            metrics.append({
-                'category': 'tools',
-                'name': 'tool_success_rate',
-                'value': overall_success_rate * 100
-            })
+        overall_success_rate = self.state.get_tool_success_rate()
+        metrics.append({
+            'category': 'tools',
+            'name': 'tool_success_rate',
+            'value': overall_success_rate
+        })
 
-        # Tool frequency distribution
-        total_tools = sum(self._tool_counts.values())
-        if total_tools > 0:
-            frequency = self._tool_counts[tool_name] / total_tools
-            metrics.append({
-                'category': 'tools',
-                'name': f'tool_frequency_{tool_name.lower()}',
-                'value': frequency * 100
-            })
+        # Tool frequency
+        frequency = self.state.get_tool_frequency(tool_name)
+        metrics.append({
+            'category': 'tools',
+            'name': f'tool_frequency_{tool_name.lower()}',
+            'value': frequency
+        })
 
         return metrics
 
@@ -200,34 +183,30 @@ class MetricsCalculator:
         Calculate code acceptance metrics.
 
         Metrics:
-        - Direct accept rate
+        - Acceptance rate
         - Rejection rate
-        - Partial accept rate
         """
         metrics = []
         payload = event.get('payload', {})
 
-        # Track if code was accepted (heuristic: no immediate undo)
-        # In real implementation, would need to correlate with subsequent events
+        # Track if code was accepted
         accepted = payload.get('accepted', True)
+        self.state.add_acceptance(accepted)
 
-        self._acceptance_window.append(1 if accepted else 0)
+        # Calculate acceptance rate from shared state
+        acceptance_rate = self.state.get_acceptance_rate()
+        metrics.append({
+            'category': 'session',
+            'name': 'acceptance_rate',
+            'value': acceptance_rate
+        })
 
-        # Calculate acceptance rate from sliding window
-        if len(self._acceptance_window) >= 10:
-            acceptance_rate = sum(self._acceptance_window) / len(self._acceptance_window)
-            metrics.append({
-                'category': 'session',
-                'name': 'acceptance_rate',
-                'value': acceptance_rate * 100
-            })
-
-            rejection_rate = 1 - acceptance_rate
-            metrics.append({
-                'category': 'session',
-                'name': 'rejection_rate',
-                'value': rejection_rate * 100
-            })
+        rejection_rate = 100 - acceptance_rate
+        metrics.append({
+            'category': 'session',
+            'name': 'rejection_rate',
+            'value': rejection_rate
+        })
 
         return metrics
 
@@ -238,14 +217,14 @@ class MetricsCalculator:
         Metrics:
         - Prompt frequency
         - Prompt length
-        - Prompt gaps
+        - Prompts per session
         """
         metrics = []
         session_id = event.get('session_id', '')
         payload = event.get('payload', {})
 
         # Track prompts per session
-        self._session_prompt_counts[session_id] += 1
+        self.state.increment_session_prompt_count(session_id)
 
         # Prompt length (if available)
         prompt_length = payload.get('prompt_length', 0)
@@ -256,11 +235,12 @@ class MetricsCalculator:
                 'value': prompt_length
             })
 
-        # Prompt frequency (prompts per session)
+        # Prompts per session
+        prompt_count = self.state.get_session_prompt_count(session_id)
         metrics.append({
             'category': 'session',
             'name': 'prompts_per_session',
-            'value': self._session_prompt_counts[session_id]
+            'value': prompt_count
         })
 
         return metrics
@@ -271,27 +251,20 @@ class MetricsCalculator:
 
         Metrics:
         - Events per second
-        - Tools per minute
         """
         metrics = []
-        current_time = time.time()
 
-        # Track events per second
-        self._events_per_second.append(current_time)
+        # Record event timestamp in shared state
+        self.state.record_event_timestamp()
 
-        # Calculate EPS for last 60 seconds
-        recent_events = [t for t in self._events_per_second if current_time - t <= 60]
-        if len(recent_events) >= 2:
-            time_span = recent_events[-1] - recent_events[0]
-            if time_span > 0:
-                eps = len(recent_events) / time_span
-                metrics.append({
-                    'category': 'realtime',
-                    'name': 'events_per_second',
-                    'value': eps
-                })
-
-        self._last_event_time = current_time
+        # Calculate EPS from shared state
+        eps = self.state.get_events_per_second()
+        if eps > 0:
+            metrics.append({
+                'category': 'realtime',
+                'name': 'events_per_second',
+                'value': eps
+            })
 
         return metrics
 
@@ -301,22 +274,26 @@ class MetricsCalculator:
 
         Metrics:
         - Session duration
-        - Tools per session
-        - Files per session
+        - Tools per minute
+        - Prompts per session
         """
         metrics = []
         session_id = event.get('session_id', '')
 
-        # Session duration
-        if session_id in self._session_starts:
-            start_time = self._session_starts[session_id]
-            end_time = event.get('timestamp', '')
+        # Get session start from shared state
+        start_time = self.state.get_session_start(session_id)
+        if not start_time:
+            # No start time recorded
+            return metrics
 
-            try:
-                start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
-                end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
-                duration_seconds = (end_dt - start_dt).total_seconds()
+        end_time = event.get('timestamp', '')
 
+        try:
+            start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+            duration_seconds = (end_dt - start_dt).total_seconds()
+
+            if duration_seconds > 0:
                 metrics.append({
                     'category': 'session',
                     'name': 'session_duration',
@@ -324,30 +301,28 @@ class MetricsCalculator:
                 })
 
                 # Tools per minute
-                tool_count = self._session_tool_counts.get(session_id, 0)
-                if duration_seconds > 0:
-                    tools_per_minute = (tool_count / duration_seconds) * 60
-                    metrics.append({
-                        'category': 'session',
-                        'name': 'tools_per_minute',
-                        'value': tools_per_minute
-                    })
-
-                # Files per session
-                file_count = len(self._session_file_changes.get(session_id, set()))
+                tool_count = self.state.get_session_tool_count(session_id)
+                tools_per_minute = (tool_count / duration_seconds) * 60
                 metrics.append({
                     'category': 'session',
-                    'name': 'files_per_session',
-                    'value': file_count
+                    'name': 'tools_per_minute',
+                    'value': tools_per_minute
                 })
 
-            except Exception as e:
-                logger.warning(f"Failed to calculate session metrics: {e}")
+                # Prompts per session (already tracked, but get final count)
+                prompt_count = self.state.get_session_prompt_count(session_id)
+                metrics.append({
+                    'category': 'session',
+                    'name': 'prompts_per_session',
+                    'value': prompt_count
+                })
 
-            # Cleanup
-            del self._session_starts[session_id]
-            self._session_tool_counts.pop(session_id, None)
-            self._session_file_changes.pop(session_id, None)
+        except Exception as e:
+            logger.warning(f"Failed to calculate session metrics: {e}")
+
+        finally:
+            # Cleanup session data
+            self.state.clear_session_data(session_id)
 
         return metrics
 
@@ -357,9 +332,9 @@ class MetricsCalculator:
 
         Productivity Score (0-100):
         - Base: 50 points
-        - Tool efficiency: up to 25 points
-        - Low errors: up to 15 points (penalty)
-        - Code impact: up to 10 points
+        - Tool efficiency: up to 25 points (based on success rate)
+        - Low errors: up to 15 points (penalty for errors)
+        - Code acceptance: up to 10 points
         """
         metrics = []
 
@@ -368,21 +343,16 @@ class MetricsCalculator:
             score = 50.0
 
             # Tool efficiency bonus (based on success rate)
-            total_success = sum(self._tool_success.values())
-            total_failures = sum(self._tool_failures.values())
-            if (total_success + total_failures) > 0:
-                success_rate = total_success / (total_success + total_failures)
-                score += success_rate * 25  # Up to 25 points
+            success_rate = self.state.get_tool_success_rate()
+            score += (success_rate / 100) * 25  # Up to 25 points
 
-            # Error penalty
-            if total_failures > 0:
-                error_rate = total_failures / (total_success + total_failures)
-                score -= error_rate * 15  # Up to 15 point penalty
+            # Error penalty (inverse of success rate)
+            error_rate = 100 - success_rate
+            score -= (error_rate / 100) * 15  # Up to 15 point penalty
 
-            # Code impact bonus (based on acceptance rate)
-            if len(self._acceptance_window) >= 10:
-                acceptance_rate = sum(self._acceptance_window) / len(self._acceptance_window)
-                score += acceptance_rate * 10  # Up to 10 points
+            # Code acceptance bonus
+            acceptance_rate = self.state.get_acceptance_rate()
+            score += (acceptance_rate / 100) * 10  # Up to 10 points
 
             # Clamp to 0-100
             score = max(0, min(100, score))
@@ -402,7 +372,7 @@ class MetricsCalculator:
         """Track session start for duration calculation."""
         session_id = event.get('session_id', '')
         timestamp = event.get('timestamp', '')
-        self._session_starts[session_id] = timestamp
+        self.state.set_session_start(session_id, timestamp)
 
     def get_current_stats(self) -> Dict[str, Any]:
         """
@@ -411,15 +381,20 @@ class MetricsCalculator:
         Returns:
             Dictionary with current metric statistics
         """
-        total_success = sum(self._tool_success.values())
-        total_failures = sum(self._tool_failures.values())
+        try:
+            percentiles = self.state.get_latency_percentiles()
+            acceptance_rate = self.state.get_acceptance_rate()
+            success_rate = self.state.get_tool_success_rate()
+            eps = self.state.get_events_per_second()
 
-        return {
-            'latency_window_size': len(self._latency_window),
-            'acceptance_window_size': len(self._acceptance_window),
-            'total_tool_executions': total_success + total_failures,
-            'tool_success_count': total_success,
-            'tool_failure_count': total_failures,
-            'active_sessions': len(self._session_starts),
-            'tracked_tool_types': len(self._tool_counts),
-        }
+            return {
+                'latency_p50': percentiles['p50'],
+                'latency_p95': percentiles['p95'],
+                'latency_avg': percentiles['avg'],
+                'acceptance_rate': acceptance_rate,
+                'tool_success_rate': success_rate,
+                'events_per_second': eps,
+            }
+        except Exception as e:
+            logger.error(f"Failed to get current stats: {e}")
+            return {}

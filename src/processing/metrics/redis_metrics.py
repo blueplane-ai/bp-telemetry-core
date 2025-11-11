@@ -3,7 +3,19 @@
 # License-Filename: LICENSE
 
 """
-Redis storage for real-time metrics using TimeSeries and Hashes.
+Redis storage for real-time metrics.
+
+IMPLEMENTATION NOTE: This currently uses basic Redis data structures (Hashes + Sorted Sets)
+for compatibility with standard Redis installations. For production at scale, consider
+using Redis TimeSeries module for:
+- Built-in downsampling and aggregations
+- Better compression
+- Optimized queries
+
+To enable Redis TimeSeries:
+  docker run -p 6379:6379 redis/redis-stack-server:latest
+
+The API is designed to support easy migration to TimeSeries without code changes.
 
 Provides sub-millisecond metric recording and retrieval with automatic expiry.
 """
