@@ -154,17 +154,23 @@ class SQLiteBatchWriter:
 
         # Batch insert
         try:
-            self.client.executemany(INSERT_QUERY, rows)
-
-            # Get sequence numbers (last_insert_rowid() gives us the last one)
-            # For batch, we need to query the last N rows
+            # Use a single connection for both insert and sequence retrieval
+            # This ensures we get the correct sequences for the batch we just inserted
             with self.client.get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT sequence FROM raw_traces ORDER BY sequence DESC LIMIT ?",
-                    (len(events),)
-                )
-                sequences = [row[0] for row in cursor.fetchall()]
-                sequences.reverse()  # Return in insertion order
+                # Insert batch
+                conn.executemany(INSERT_QUERY, rows)
+                
+                # Get sequence numbers immediately after insert (same connection)
+                # Use last_insert_rowid() to get the last sequence, then calculate backwards
+                cursor = conn.execute("SELECT last_insert_rowid()")
+                last_rowid = cursor.fetchone()[0]
+                
+                # Calculate sequence numbers: if we inserted N rows, sequences are
+                # last_rowid - (N-1) through last_rowid
+                sequences = list(range(last_rowid - len(rows) + 1, last_rowid + 1))
+                
+                # Commit the transaction
+                conn.commit()
 
             logger.debug(f"Wrote batch of {len(events)} events, sequences: {sequences[0]}-{sequences[-1]}")
             
