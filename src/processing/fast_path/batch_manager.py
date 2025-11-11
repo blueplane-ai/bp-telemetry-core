@@ -10,12 +10,20 @@ Manages batching logic: size-based and time-based flushing.
 
 import time
 import threading
-from typing import Dict, List, Any, Optional, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Any, Optional, Tuple, Iterable
 from collections import deque
 
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BatchItem:
+    event: Dict[str, Any]
+    message_id: str
+    added_at: float
 
 
 class BatchManager:
@@ -39,8 +47,8 @@ class BatchManager:
         """
         self.batch_size = batch_size
         self.batch_timeout = batch_timeout
-        # Store (event, message_id) tuples to preserve IDs for ACK
-        self._batch_items: deque = deque()
+        # Store BatchItem entries to preserve metadata for ACK handling
+        self._batch_items: deque[BatchItem] = deque()
         self._lock = threading.Lock()
         self._first_event_time: Optional[float] = None
 
@@ -56,10 +64,11 @@ class BatchManager:
             True if batch is ready to flush, False otherwise
         """
         with self._lock:
+            now = time.time()
             if len(self._batch_items) == 0:
-                self._first_event_time = time.time()
+                self._first_event_time = now
 
-            self._batch_items.append((event, message_id))
+            self._batch_items.append(BatchItem(event=event, message_id=message_id, added_at=now))
 
             # Check if batch is full
             if len(self._batch_items) >= self.batch_size:
@@ -77,9 +86,10 @@ class BatchManager:
         with self._lock:
             events = []
             message_ids = []
-            for event, message_id in self._batch_items:
-                events.append(event)
-                message_ids.append(message_id)
+            while self._batch_items:
+                item = self._batch_items.popleft()
+                events.append(item.event)
+                message_ids.append(item.message_id)
             
             self._batch_items.clear()
             self._first_event_time = None
@@ -90,6 +100,29 @@ class BatchManager:
         with self._lock:
             self._batch_items.clear()
             self._first_event_time = None
+
+    def remove_message_ids(self, message_ids: Iterable[str]) -> None:
+        """
+        Remove specific message IDs from the current batch.
+
+        Args:
+            message_ids: Iterable of message IDs to remove
+        """
+        ids = set(message_ids)
+        if not ids:
+            return
+
+        with self._lock:
+            if not self._batch_items:
+                return
+
+            filtered_items = deque(item for item in self._batch_items if item.message_id not in ids)
+            self._batch_items = filtered_items
+
+            if self._batch_items:
+                self._first_event_time = self._batch_items[0].added_at
+            else:
+                self._first_event_time = None
 
     def should_flush(self) -> bool:
         """
