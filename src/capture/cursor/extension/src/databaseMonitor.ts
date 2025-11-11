@@ -9,14 +9,13 @@
  * Uses dual strategy: file watcher + polling.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-import Database from 'better-sqlite3';
-import chokidar from 'chokidar';
-import { QueueWriter } from './queueWriter';
-import { SessionManager } from './sessionManager';
-import { GenerationData, TelemetryEvent } from './types';
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+import Database from "better-sqlite3";
+import chokidar from "chokidar";
+import { QueueWriter } from "./queueWriter";
+import { TelemetryEvent } from "./types";
 
 export class DatabaseMonitor {
   private dbPath: string | null = null;
@@ -25,11 +24,23 @@ export class DatabaseMonitor {
   private pollInterval: NodeJS.Timeout | null = null;
   private lastDataVersion: number = 0;
   private isMonitoring: boolean = false;
+  private getSessionInfo:
+    | (() => { sessionId: string; workspaceHash: string } | null)
+    | null = null;
 
-  constructor(
-    private queueWriter: QueueWriter,
-    private sessionManager: SessionManager
-  ) {}
+  constructor(private queueWriter: QueueWriter) {
+    // getSessionInfo will be set via setSessionInfoGetter after initialization
+  }
+
+  /**
+   * Set the session info getter function
+   * This method allows setting the callback after construction to avoid initialization order issues
+   */
+  setSessionInfoGetter(
+    getSessionInfo: () => { sessionId: string; workspaceHash: string } | null
+  ): void {
+    this.getSessionInfo = getSessionInfo;
+  }
 
   /**
    * Start monitoring Cursor's database
@@ -39,28 +50,64 @@ export class DatabaseMonitor {
       // Find Cursor's database
       this.dbPath = this.locateCursorDatabase();
       if (!this.dbPath) {
-        console.warn('Could not locate Cursor database');
+        console.warn("Could not locate Cursor database");
         return false;
       }
 
       console.log(`Found Cursor database at: ${this.dbPath}`);
 
+      // Check if file exists before opening
+      if (!fs.existsSync(this.dbPath)) {
+        console.warn(`Cursor database file does not exist: ${this.dbPath}`);
+        return false;
+      }
+
       // Open database in read-only mode
-      this.db = new Database(this.dbPath, { readonly: true, fileMustExist: true });
+      try {
+        this.db = new Database(this.dbPath, {
+          readonly: true,
+          fileMustExist: true,
+        });
+      } catch (dbError) {
+        console.error(`Failed to open database at ${this.dbPath}:`, dbError);
+        // Database might be locked or corrupted - this is not fatal
+        return false;
+      }
 
       // Get initial data version
-      this.lastDataVersion = this.getCurrentDataVersion();
+      try {
+        this.lastDataVersion = this.getCurrentDataVersion();
+      } catch (versionError) {
+        console.warn("Failed to get initial data version:", versionError);
+        // Continue anyway - version check will retry
+        this.lastDataVersion = 0;
+      }
 
       // Start file watcher (primary method)
-      this.startFileWatcher();
+      try {
+        this.startFileWatcher();
+      } catch (watcherError) {
+        console.warn("Failed to start file watcher:", watcherError);
+        // Continue with polling only
+      }
 
       // Start polling (backup method, every 30 seconds)
-      this.startPolling(30000);
+      try {
+        this.startPolling(30000);
+      } catch (pollError) {
+        console.error("Failed to start polling:", pollError);
+        // If both watcher and polling fail, return false
+        if (!this.watcher) {
+          return false;
+        }
+      }
 
       this.isMonitoring = true;
       return true;
     } catch (error) {
-      console.error('Failed to start database monitoring:', error);
+      console.error("Failed to start database monitoring:", error);
+      // Clean up on error
+      this.stopMonitoring();
       return false;
     }
   }
@@ -85,7 +132,7 @@ export class DatabaseMonitor {
     }
 
     this.isMonitoring = false;
-    console.log('Stopped database monitoring');
+    console.log("Stopped database monitoring");
   }
 
   /**
@@ -97,19 +144,19 @@ export class DatabaseMonitor {
     // macOS path
     const macPath = path.join(
       homeDir,
-      'Library/Application Support/Cursor/User/workspaceStorage'
+      "Library/Application Support/Cursor/User/workspaceStorage"
     );
 
     // Linux path
     const linuxPath = path.join(
       homeDir,
-      '.config/Cursor/User/workspaceStorage'
+      ".config/Cursor/User/workspaceStorage"
     );
 
     // Windows path
     const winPath = path.join(
       homeDir,
-      'AppData/Roaming/Cursor/User/workspaceStorage'
+      "AppData/Roaming/Cursor/User/workspaceStorage"
     );
 
     // Try each platform path
@@ -118,7 +165,7 @@ export class DatabaseMonitor {
         // Find workspace directories
         const workspaces = fs.readdirSync(basePath);
         for (const workspace of workspaces) {
-          const dbFile = path.join(basePath, workspace, 'state.vscdb');
+          const dbFile = path.join(basePath, workspace, "state.vscdb");
           if (fs.existsSync(dbFile)) {
             return dbFile;
           }
@@ -144,11 +191,11 @@ export class DatabaseMonitor {
       },
     });
 
-    this.watcher.on('change', () => {
+    this.watcher.on("change", () => {
       this.checkForChanges();
     });
 
-    console.log('Started file watcher for database');
+    console.log("Started file watcher for database");
   }
 
   /**
@@ -166,16 +213,27 @@ export class DatabaseMonitor {
    * Check for database changes
    */
   private checkForChanges(): void {
+    if (!this.db || !this.isMonitoring) {
+      return;
+    }
+
     try {
       const currentVersion = this.getCurrentDataVersion();
 
       if (currentVersion > this.lastDataVersion) {
-        console.log(`Data version changed: ${this.lastDataVersion} -> ${currentVersion}`);
+        console.log(
+          `Data version changed: ${this.lastDataVersion} -> ${currentVersion}`
+        );
         this.captureChanges(this.lastDataVersion, currentVersion);
         this.lastDataVersion = currentVersion;
       }
     } catch (error) {
-      console.error('Error checking for changes:', error);
+      console.error("Error checking for changes:", error);
+      // If database becomes unavailable, stop monitoring
+      if (error instanceof Error && error.message.includes("database")) {
+        console.warn("Database appears to be unavailable, stopping monitoring");
+        this.stopMonitoring();
+      }
     }
   }
 
@@ -186,13 +244,16 @@ export class DatabaseMonitor {
     if (!this.db) return 0;
 
     try {
-      const row = this.db.prepare(
-        'SELECT MAX(data_version) as max_version FROM "aiService.generations"'
-      ).get() as { max_version: number };
+      const row = this.db
+        .prepare(
+          'SELECT MAX(data_version) as max_version FROM "aiService.generations"'
+        )
+        .get() as { max_version: number };
 
       return row?.max_version || 0;
     } catch (error) {
-      // Table might not exist yet
+      // Table might not exist yet or database might be locked
+      console.debug("Could not get data version:", error);
       return 0;
     }
   }
@@ -205,11 +266,13 @@ export class DatabaseMonitor {
 
     try {
       // Query new generations
-      const generations = this.db.prepare(
-        `SELECT * FROM "aiService.generations"
+      const generations = this.db
+        .prepare(
+          `SELECT * FROM "aiService.generations"
          WHERE data_version > ? AND data_version <= ?
          ORDER BY data_version ASC`
-      ).all(fromVersion, toVersion) as any[];
+        )
+        .all(fromVersion, toVersion) as any[];
 
       console.log(`Found ${generations.length} new generations`);
 
@@ -218,7 +281,7 @@ export class DatabaseMonitor {
         this.processGeneration(gen);
       }
     } catch (error) {
-      console.error('Error capturing changes:', error);
+      console.error("Error capturing changes:", error);
     }
   }
 
@@ -226,42 +289,56 @@ export class DatabaseMonitor {
    * Process a single generation event
    */
   private processGeneration(gen: any): void {
-    const session = this.sessionManager.getCurrentSession();
+    if (!this.getSessionInfo) {
+      console.debug("No session info getter available, skipping generation");
+      return;
+    }
+
+    const session = this.getSessionInfo();
     if (!session) {
-      console.debug('No active session, skipping generation');
+      console.debug("No active session, skipping generation");
+      return;
+    }
+
+    if (!this.queueWriter || !this.queueWriter.isConnected()) {
+      console.debug("QueueWriter not available, skipping generation");
       return;
     }
 
     try {
       // Parse generation value (JSON)
-      const value = typeof gen.value === 'string'
-        ? JSON.parse(gen.value)
-        : gen.value;
+      const value =
+        typeof gen.value === "string" ? JSON.parse(gen.value) : gen.value;
 
       // Create trace event (use snake_case for consistency with Python hooks)
       const event: TelemetryEvent = {
-        version: '0.1.0',
-        hookType: 'DatabaseTrace',
-        eventType: 'database_trace',
+        version: "0.1.0",
+        hookType: "DatabaseTrace",
+        eventType: "database_trace",
         timestamp: new Date().toISOString(),
         payload: {
-          trace_type: 'generation',
+          trace_type: "generation",
           generation_id: gen.uuid,
           data_version: gen.data_version,
-          model: value.model,
-          tokens_used: value.tokensUsed || value.completionTokens,
+          model: value?.model || "unknown",
+          tokens_used: value?.tokensUsed || value?.completionTokens || 0,
         },
         metadata: {
           workspace_hash: session.workspaceHash,
         },
       };
 
-      // Send to message queue
-      this.queueWriter.enqueue(event, 'cursor', session.sessionId);
+      // Send to message queue (fire and forget)
+      this.queueWriter
+        .enqueue(event, "cursor", session.sessionId)
+        .catch((error) => {
+          console.error("Failed to enqueue generation event:", error);
+        });
 
       console.debug(`Captured generation: ${gen.uuid}`);
     } catch (error) {
-      console.error('Error processing generation:', error);
+      console.error("Error processing generation:", error);
+      // Don't throw - continue processing other generations
     }
   }
 

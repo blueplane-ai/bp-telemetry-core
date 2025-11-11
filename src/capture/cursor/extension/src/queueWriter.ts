@@ -8,16 +8,16 @@
  * TypeScript version of the queue writer for use in the extension.
  */
 
-import { createClient, RedisClientType } from 'redis';
-import { TelemetryEvent } from './types';
-import { randomUUID } from 'crypto';
+import { createClient, RedisClientType } from "redis";
+import { TelemetryEvent } from "./types";
+import { randomUUID } from "crypto";
 
 export class QueueWriter {
   private client: RedisClientType | null = null;
   private connected: boolean = false;
 
   constructor(
-    private redisHost: string = 'localhost',
+    private redisHost: string = "localhost",
     private redisPort: number = 6379
   ) {}
 
@@ -30,18 +30,31 @@ export class QueueWriter {
         socket: {
           host: this.redisHost,
           port: this.redisPort,
-          connectTimeout: 1000,
+          connectTimeout: 5000, // Increased timeout
+          reconnectStrategy: (retries) => {
+            // Don't retry indefinitely
+            if (retries > 3) {
+              console.warn("Redis reconnection failed after 3 attempts");
+              return false;
+            }
+            return Math.min(retries * 100, 3000);
+          },
         },
       });
 
-      this.client.on('error', (err) => {
-        console.error('Redis Client Error:', err);
+      this.client.on("error", (err) => {
+        console.error("Redis Client Error:", err);
         this.connected = false;
       });
 
-      this.client.on('connect', () => {
-        console.log('Connected to Redis');
+      this.client.on("connect", () => {
+        console.log("Connected to Redis");
         this.connected = true;
+      });
+
+      this.client.on("reconnecting", () => {
+        console.log("Redis reconnecting...");
+        this.connected = false;
       });
 
       await this.client.connect();
@@ -50,8 +63,17 @@ export class QueueWriter {
       this.connected = true;
       return true;
     } catch (error) {
-      console.warn('Failed to connect to Redis:', error);
+      console.warn("Failed to connect to Redis:", error);
       this.connected = false;
+      // Clean up client on failure
+      if (this.client) {
+        try {
+          await this.client.quit();
+        } catch (quitError) {
+          // Ignore quit errors
+        }
+        this.client = null;
+      }
       return false;
     }
   }
@@ -65,7 +87,7 @@ export class QueueWriter {
     sessionId: string
   ): Promise<boolean> {
     if (!this.client || !this.connected) {
-      console.debug('Redis not connected, skipping event');
+      console.debug("Redis not connected, skipping event");
       return false;
     }
 
@@ -77,7 +99,7 @@ export class QueueWriter {
       const streamEntry: Record<string, string> = {
         event_id: eventId,
         enqueued_at: enqueuedAt,
-        retry_count: '0',
+        retry_count: "0",
         platform: platform,
         external_session_id: sessionId,
         hook_type: event.hookType,
@@ -96,13 +118,13 @@ export class QueueWriter {
 
       // Write to Redis Stream with auto-trim
       await this.client.xAdd(
-        'telemetry:events',
-        '*', // Auto-generate ID
+        "telemetry:events",
+        "*", // Auto-generate ID
         streamEntry,
         {
           TRIM: {
-            strategy: 'MAXLEN',
-            strategyModifier: '~',
+            strategy: "MAXLEN",
+            strategyModifier: "~",
             threshold: 10000,
           },
         }
@@ -111,7 +133,7 @@ export class QueueWriter {
       console.debug(`Enqueued event ${eventId} to telemetry:events`);
       return true;
     } catch (error) {
-      console.error('Failed to enqueue event:', error);
+      console.error("Failed to enqueue event:", error);
       return false;
     }
   }
@@ -142,15 +164,15 @@ export class QueueWriter {
     }
 
     try {
-      const info = await this.client.xInfoStream('telemetry:events');
+      const info = await this.client.xInfoStream("telemetry:events");
       return {
         length: info.length,
-        firstEntry: info.firstEntry,
-        lastEntry: info.lastEntry,
+        firstEntry: info["first-entry"],
+        lastEntry: info["last-entry"],
         groups: info.groups,
       };
     } catch (error) {
-      console.error('Failed to get queue stats:', error);
+      console.error("Failed to get queue stats:", error);
       return null;
     }
   }
