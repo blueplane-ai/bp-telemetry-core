@@ -4,54 +4,54 @@
 # License-Filename: LICENSE
 
 """
-Cursor Hook: beforeMCPExecution
+Cursor beforeMCPExecution Hook (stdin/stdout)
 
-Captures event before MCP tool execution.
+Fires before an MCP tool is executed.
+Receives JSON via stdin, outputs permission decision via stdout.
 """
 
 import sys
 from pathlib import Path
 
+# Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hook_base import CursorHookBase
-from shared.event_schema import HookType, EventType
+from shared.event_schema import EventType, HookType
 
 
 class BeforeMCPExecutionHook(CursorHookBase):
-    """Hook for before MCP tool execution."""
+    """Hook that fires before MCP tool execution."""
 
     def __init__(self):
         super().__init__(HookType.BEFORE_MCP_EXECUTION)
 
     def execute(self) -> int:
         """Execute hook logic."""
-        args = self.parse_args({
-            'tool_name': {'type': str, 'help': 'MCP tool name'},
-            'input_size': {'type': int, 'help': 'Input size in bytes', 'default': 0},
-            'generation_id': {'type': str, 'help': 'Generation ID', 'default': None},
-        })
+        # Extract MCP data from stdin
+        tool_name = self.input_data.get('tool_name', '')
+        tool_input = self.input_data.get('tool_input', '')
 
+        # Build event payload
         payload = {
-            'tool_name': args.tool_name,
-            'input_size': args.input_size,
-            'generation_id': args.generation_id,
+            'tool_name': tool_name,
+            'input_size': len(str(tool_input)),
         }
 
+        # Build and enqueue event
         event = self.build_event(
             event_type=EventType.MCP_EXECUTION,
             payload=payload
         )
 
         self.enqueue_event(event)
+
+        # Always allow execution
+        self.write_output({"permission": "allow"})
+
         return 0
 
 
-def main():
-    """Main entry point."""
+if __name__ == '__main__':
     hook = BeforeMCPExecutionHook()
     sys.exit(hook.run())
-
-
-if __name__ == '__main__':
-    main()

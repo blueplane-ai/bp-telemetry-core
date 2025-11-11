@@ -4,52 +4,55 @@
 # License-Filename: LICENSE
 
 """
-Cursor Hook: beforeReadFile
+Cursor beforeReadFile Hook (stdin/stdout)
 
-Captures event before reading a file.
+Fires before agent reads a file.
+Receives JSON via stdin, outputs permission decision via stdout.
 """
 
 import sys
 from pathlib import Path
 
+# Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hook_base import CursorHookBase
-from shared.event_schema import HookType, EventType
+from shared.event_schema import EventType, HookType
 
 
 class BeforeReadFileHook(CursorHookBase):
-    """Hook for before file read."""
+    """Hook that fires before file read."""
 
     def __init__(self):
         super().__init__(HookType.BEFORE_READ_FILE)
 
     def execute(self) -> int:
         """Execute hook logic."""
-        args = self.parse_args({
-            'file_extension': {'type': str, 'help': 'File extension', 'default': None},
-            'file_size': {'type': int, 'help': 'File size in bytes', 'default': 0},
-        })
+        # Extract file read data from stdin
+        file_path = self.input_data.get('file_path', '')
+        content = self.input_data.get('content', '')
+        attachments = self.input_data.get('attachments', [])
 
+        # Build event payload
         payload = {
-            'file_extension': args.file_extension,
-            'file_size': args.file_size,
+            'file_extension': Path(file_path).suffix if file_path else None,
+            'file_size': len(content),
         }
 
+        # Build and enqueue event
         event = self.build_event(
             event_type=EventType.FILE_READ,
             payload=payload
         )
 
         self.enqueue_event(event)
+
+        # Always allow file read
+        self.write_output({"permission": "allow"})
+
         return 0
 
 
-def main():
-    """Main entry point."""
+if __name__ == '__main__':
     hook = BeforeReadFileHook()
     sys.exit(hook.run())
-
-
-if __name__ == '__main__':
-    main()
