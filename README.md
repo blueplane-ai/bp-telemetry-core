@@ -21,7 +21,7 @@ Blueplane Telemetry Core is an open-source system for capturing, processing, and
 - **Multi-Platform**: Supports Claude Code, Cursor, and extensible to other AI assistants
 - **Real-Time Analytics**: Sub-second metrics updates with async processing pipeline
 - **Rich Insights**: Track acceptance rates, productivity, tool usage, and conversation patterns
-- **Zero Configuration**: Embedded databases (DuckDB, SQLite, Redis) with no setup required
+- **Zero Configuration**: Embedded databases (SQLite, Redis) with minimal setup required
 - **Multiple Interfaces**: CLI, MCP Server, and Web Dashboard for accessing your data
 
 ## Architecture
@@ -39,6 +39,7 @@ See [Architecture Overview](./docs/ARCHITECTURE.md) for detailed information.
 ### Installation (Cursor)
 
 **Prerequisites:**
+
 - Python 3.11+
 - Redis server
 - Cursor IDE
@@ -57,25 +58,73 @@ redis-server
 # 4. Initialize Redis streams
 python scripts/init_redis.py
 
-# 5. Install hooks to your Cursor workspace
-python scripts/install_cursor.py --workspace /path/to/your/project
+# 5. Initialize SQLite database
+python scripts/init_database.py
 
-# 6. Verify installation
-python scripts/verify_installation.py --workspace /path/to/your/project
-```
+# 6. Install global hooks (installs to ~/.cursor/hooks/ for all workspaces)
+cd src/capture/cursor
+./install_global_hooks.sh
 
-**Optional: Install Cursor Extension**
-
-For database monitoring and automatic session management:
-
-```bash
-cd src/capture/cursor/extension
+# 7. Install and activate Cursor extension (required for database monitoring)
+cd extension
 npm install
 npm run compile
-# Then install the VSIX in Cursor
+# Then install the VSIX in Cursor via Extensions panel
+
+# 8. Configure Cursor for telemetry
+# In Cursor: Open Command Palette (Cmd+Shift+P / Ctrl+Shift+P)
+# Run: "Developer: Set Log Level" → Select "Trace"
+# This enables detailed logging for database monitoring
+
+# 9. Start the processing server (in a separate terminal)
+cd ../../..
+python scripts/start_server.py
+
+# 10. Verify installation
+python scripts/verify_installation.py
+
+# Note: verify_installation.py checks workspace hooks, but global hooks
+# are installed to ~/.cursor/hooks/. To verify global hooks:
+ls ~/.cursor/hooks/*.py
+ls ~/.cursor/hooks.json
 ```
 
-### Verification
+### Installation (Claude Code)
+
+**Prerequisites:**
+
+- Python 3.11+
+- Redis server
+- Claude Code IDE
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/blueplane-ai/bp-telemetry-core.git
+cd bp-telemetry-core
+
+# 2. Install Python dependencies
+pip install -r requirements.txt
+
+# 3. Start Redis server
+redis-server
+
+# 4. Initialize Redis streams
+python scripts/init_redis.py
+
+# 5. Initialize SQLite database
+python scripts/init_database.py
+
+# 6. Install Claude Code hooks
+# TODO: Add Claude Code installation instructions
+
+# 7. Start the processing server (in a separate terminal)
+python scripts/start_server.py
+
+# 8. Verify installation
+# TODO: Add Claude Code verification steps
+```
+
+### Verification (Cursor)
 
 After installation, hooks will automatically capture events as you work in Cursor:
 
@@ -85,6 +134,19 @@ redis-cli XLEN telemetry:events
 
 # View recent events
 redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+
+# Check SQLite database (events are stored here)
+python -c "
+from src.processing.database.sqlite_client import SQLiteClient
+from pathlib import Path
+client = SQLiteClient(str(Path.home() / '.blueplane' / 'telemetry.db'))
+with client.get_connection() as conn:
+    cursor = conn.execute('SELECT COUNT(*) FROM raw_traces')
+    print(f'Total events in database: {cursor.fetchone()[0]}')
+"
+
+# Run end-to-end test
+python scripts/test_end_to_end.py
 ```
 
 ## Use Cases
@@ -115,13 +177,13 @@ Lightweight telemetry capture that integrates with your IDE:
 
 [Learn more →](./docs/architecture/layer1_capture.md)
 
-### Layer 2: Processing
+### Layer 2: Processing ✅
 
 High-performance async pipeline for event processing:
 
-- **Fast Path**: Zero-latency raw event ingestion (<1ms P95)
-- **Slow Path**: Async workers for metrics calculation and conversation reconstruction
-- **Storage**: DuckDB for raw traces, SQLite for conversations, Redis for real-time metrics
+- **Fast Path**: Low-latency raw event ingestion (<10ms P95) - ✅ Implemented
+- **Slow Path**: Async workers for metrics calculation and conversation reconstruction (coming soon)
+- **Storage**: SQLite for raw traces and conversations, Redis for real-time metrics and message queue
 
 [Learn more →](./docs/architecture/layer2_async_pipeline.md)
 
@@ -159,18 +221,18 @@ Blueplane Telemetry Core is designed with privacy as the top priority:
 
 Blueplane Telemetry Core is optimized for minimal overhead:
 
-- **Fast Path Ingestion**: <1ms latency at P95
+- **Fast Path Ingestion**: <10ms latency at P95 (per batch of 100 events)
 - **Memory Footprint**: ~50MB baseline
-- **Storage Efficiency**: Columnar compression for raw traces
-- **Real-Time Metrics**: Sub-millisecond dashboard updates
+- **Storage Efficiency**: zlib compression (7-10x ratio) for raw traces
+- **Real-Time Metrics**: Sub-second updates (coming soon)
 
 ## Technology Stack
 
-- **Languages**: Python 3.11+, TypeScript (Dashboard)
-- **Databases**: DuckDB, SQLite, Redis
-- **CLI**: Rich, Plotext, Click
-- **Async**: asyncio, aiohttp, httpx
-- **Web**: FastAPI, React (Dashboard)
+- **Languages**: Python 3.11+, TypeScript (Extension)
+- **Databases**: SQLite (raw traces + conversations), Redis (message queue + metrics)
+- **CLI**: Rich, Plotext, Click (coming soon)
+- **Async**: asyncio, redis-py
+- **Web**: FastAPI, React (Dashboard - coming soon)
 
 ## Roadmap
 
@@ -183,7 +245,11 @@ Blueplane Telemetry Core is optimized for minimal overhead:
   - [x] Redis Streams message queue
   - [x] Installation scripts
 - [ ] Layer 1 capture for Claude Code
-- [ ] Layer 2 async pipeline with fast/slow paths
+- [x] **Layer 2 async pipeline** (✅ Fast Path Complete)
+  - [x] Fast path consumer (Redis Streams → SQLite)
+  - [x] SQLite database with compression
+  - [x] CDC event publishing
+  - [ ] Slow path workers (metrics, conversations)
 - [ ] Layer 3 CLI interface
 - [ ] Core metrics and analytics
 - [ ] MCP Server implementation
@@ -227,26 +293,40 @@ mypy src/
 ```
 bp-telemetry-core/
 ├── src/
-│   └── capture/              # Layer 1 implementation ✅
-│       ├── shared/           # Shared components
-│       │   ├── queue_writer.py
-│       │   ├── event_schema.py
-│       │   ├── config.py
-│       │   └── privacy.py
-│       ├── cursor/           # Cursor platform
-│       │   ├── hooks/        # 9 hook scripts
-│       │   │   ├── before_submit_prompt.py
-│       │   │   ├── after_agent_response.py
-│       │   │   └── ...
-│       │   └── extension/    # VSCode extension
-│       └── tests/            # Unit tests
+│   ├── capture/              # Layer 1 implementation ✅
+│   │   ├── shared/           # Shared components
+│   │   │   ├── queue_writer.py
+│   │   │   ├── event_schema.py
+│   │   │   ├── config.py
+│   │   │   └── privacy.py
+│   │   └── cursor/           # Cursor platform
+│   │       ├── hooks/        # 9 hook scripts
+│   │       │   ├── before_submit_prompt.py
+│   │       │   ├── after_agent_response.py
+│   │       │   └── ...
+│   │       ├── install_global_hooks.sh  # Global hooks installer
+│   │       └── extension/    # VSCode extension
+│   └── processing/           # Layer 2 implementation ✅
+│       ├── database/         # SQLite client and schema
+│       │   ├── sqlite_client.py
+│       │   ├── schema.py
+│       │   └── writer.py
+│       ├── fast_path/       # Fast path consumer
+│       │   ├── consumer.py
+│       │   ├── batch_manager.py
+│       │   └── cdc_publisher.py
+│       └── server.py        # Main processing server
 ├── config/
 │   ├── redis.yaml           # Redis configuration
 │   └── privacy.yaml         # Privacy settings
 ├── scripts/
-│   ├── init_redis.py        # Initialize Redis
-│   ├── install_cursor.py    # Install to Cursor
-│   └── verify_installation.py
+│   ├── init_redis.py        # Initialize Redis streams
+│   ├── init_database.py     # Initialize SQLite database
+│   ├── start_server.py      # Start processing server
+│   ├── install_cursor.py    # Install workspace hooks (legacy)
+│   ├── verify_installation.py
+│   ├── test_end_to_end.py   # End-to-end test
+│   └── test_database_traces.py
 ├── docs/
 │   └── architecture/        # Architecture docs
 └── README.md
