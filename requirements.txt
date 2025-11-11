@@ -5,6 +5,7 @@
 # Core dependencies
 redis>=4.6.0          # Redis client for Streams message queue
 pyyaml>=6.0           # YAML configuration parsing
+aiosqlite>=0.19.0     # Async SQLite driver for database monitoring
 
 # Optional dependencies for development
 pytest>=7.4.0         # Testing framework
