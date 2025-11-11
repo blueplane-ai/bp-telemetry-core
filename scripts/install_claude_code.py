@@ -112,6 +112,8 @@ def update_settings_json(hooks_dir: Path, backup: bool = True) -> bool:
     """
     Update ~/.claude/settings.json with hook configuration.
 
+    Properly merges with existing hooks instead of overwriting them.
+
     Args:
         hooks_dir: Path to hooks directory
         backup: Whether to backup existing settings.json
@@ -145,22 +147,62 @@ def update_settings_json(hooks_dir: Path, backup: bool = True) -> bool:
             "PreToolUse": "pre_tool_use.py",
             "PostToolUse": "post_tool_use.py",
             "PreCompact": "pre_compact.py",
-            "Stop": "stop.py",
+            "Stop": "stop.py",  # This is the session end hook
         }
 
-        # Add each hook
+        # Merge each hook (don't overwrite existing hooks)
         for hook_name, script_name in hook_configs.items():
             hook_path = hooks_dir / script_name
-            if hook_path.exists():
+            if not hook_path.exists():
+                continue
+
+            new_hook = {
+                "type": "command",
+                "command": str(hook_path)
+            }
+
+            # Check if this hook type already exists
+            if hook_name in settings["hooks"]:
+                # Hook type exists - merge with existing matchers
+                existing_matchers = settings["hooks"][hook_name]
+
+                # Find matcher with empty string ""
+                empty_matcher_found = False
+                for matcher_entry in existing_matchers:
+                    if matcher_entry.get("matcher") == "":
+                        # Found empty matcher - check if our hook is already present
+                        hooks_list = matcher_entry.get("hooks", [])
+
+                        # Check for duplicate
+                        is_duplicate = any(
+                            h.get("command") == new_hook["command"]
+                            for h in hooks_list
+                        )
+
+                        if not is_duplicate:
+                            # Append our hook to existing hooks
+                            hooks_list.append(new_hook)
+                            matcher_entry["hooks"] = hooks_list
+                            print(f"   ✅ Merged {hook_name} (added to existing hooks)")
+                        else:
+                            print(f"   ⏭️  {hook_name} (already configured)")
+
+                        empty_matcher_found = True
+                        break
+
+                if not empty_matcher_found:
+                    # No empty matcher found - add new matcher entry
+                    existing_matchers.append({
+                        "matcher": "",
+                        "hooks": [new_hook]
+                    })
+                    print(f"   ✅ Merged {hook_name} (added new matcher)")
+            else:
+                # Hook type doesn't exist - create it
                 settings["hooks"][hook_name] = [
                     {
                         "matcher": "",
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": str(hook_path)
-                            }
-                        ]
+                        "hooks": [new_hook]
                     }
                 ]
                 print(f"   ✅ Registered {hook_name}")
