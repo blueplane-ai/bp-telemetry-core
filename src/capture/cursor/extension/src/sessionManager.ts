@@ -189,6 +189,7 @@ export class SessionManager {
 
     // Build session event (use snake_case for consistency with Python hooks)
     const event = {
+      version: '0.1.0',
       hookType: 'session',
       eventType: `session_${eventType}`,
       timestamp: new Date().toISOString(),

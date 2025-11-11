@@ -240,6 +240,7 @@ export class DatabaseMonitor {
 
       // Create trace event (use snake_case for consistency with Python hooks)
       const event: TelemetryEvent = {
+        version: '0.1.0',
         hookType: 'DatabaseTrace',
         eventType: 'database_trace',
         timestamp: new Date().toISOString(),

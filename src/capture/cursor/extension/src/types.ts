@@ -68,6 +68,7 @@ export interface GenerationData {
  * Telemetry event for message queue
  */
 export interface TelemetryEvent {
+  version: string;
   hookType: string;
   eventType: string;
   timestamp: string;
