@@ -24,6 +24,7 @@ from .fast_path.consumer import FastPathConsumer
 from .fast_path.cdc_publisher import CDCPublisher
 from .cursor.session_monitor import SessionMonitor
 from .cursor.database_monitor import CursorDatabaseMonitor
+from .claude_code.transcript_monitor import ClaudeCodeTranscriptMonitor
 from ..capture.shared.config import Config
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class TelemetryServer:
         self.consumer: Optional[FastPathConsumer] = None
         self.session_monitor: Optional[SessionMonitor] = None
         self.cursor_monitor: Optional[CursorDatabaseMonitor] = None
+        self.claude_code_monitor: Optional[ClaudeCodeTranscriptMonitor] = None
         self.running = False
 
     def _initialize_database(self) -> None:
@@ -133,16 +135,16 @@ class TelemetryServer:
         # Check if cursor monitoring is enabled (default: True)
         # For now, we'll enable it by default. Can be made configurable later.
         enabled = True  # TODO: Load from config
-        
+
         if not enabled:
             logger.info("Cursor database monitoring is disabled")
             return
-        
+
         logger.info("Initializing Cursor database monitor")
-        
+
         # Create session monitor
         self.session_monitor = SessionMonitor(self.redis_client)
-        
+
         # Create database monitor
         self.cursor_monitor = CursorDatabaseMonitor(
             redis_client=self.redis_client,
@@ -152,8 +154,32 @@ class TelemetryServer:
             query_timeout=1.5,
             max_retries=3,
         )
-        
+
         logger.info("Cursor database monitor initialized")
+
+    def _initialize_claude_code_monitor(self) -> None:
+        """Initialize Claude Code transcript monitor."""
+        # Check if claude code monitoring is enabled (default: True)
+        enabled = True  # TODO: Load from config
+
+        if not enabled:
+            logger.info("Claude Code transcript monitoring is disabled")
+            return
+
+        logger.info("Initializing Claude Code transcript monitor")
+
+        stream_config = self.config.get_stream_config("message_queue")
+
+        # Create transcript monitor
+        self.claude_code_monitor = ClaudeCodeTranscriptMonitor(
+            redis_client=self.redis_client,
+            stream_name=stream_config.name,
+            consumer_group="transcript_processors",
+            consumer_name="transcript_monitor-1",
+            poll_interval=1.0,
+        )
+
+        logger.info("Claude Code transcript monitor initialized")
 
     async def start(self) -> None:
         """Start the server."""
@@ -169,11 +195,15 @@ class TelemetryServer:
             self._initialize_redis()
             self._initialize_consumer()
             self._initialize_cursor_monitor()
+            self._initialize_claude_code_monitor()
 
-            # Start cursor monitor (if enabled) - runs concurrently
+            # Start monitors (if enabled) - runs concurrently
             if self.session_monitor and self.cursor_monitor:
                 await self.session_monitor.start()
                 await self.cursor_monitor.start()
+
+            if self.claude_code_monitor:
+                await self.claude_code_monitor.start()
 
             # Start consumer (this blocks)
             self.running = True
@@ -190,6 +220,9 @@ class TelemetryServer:
 
         logger.info("Stopping server...")
         self.running = False
+
+        if self.claude_code_monitor:
+            await self.claude_code_monitor.stop()
 
         if self.cursor_monitor:
             await self.cursor_monitor.stop()

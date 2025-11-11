@@ -45,6 +45,9 @@ class EventType(str, Enum):
     # Database traces
     DATABASE_TRACE = "database_trace"
 
+    # Transcript traces
+    TRANSCRIPT_TRACE = "transcript_trace"
+
     # Acceptance tracking
     ACCEPTANCE_DECISION = "acceptance_decision"
 
@@ -59,6 +62,7 @@ class HookType(str, Enum):
     """Hook types for different platforms."""
     # Claude Code hooks
     SESSION_START = "SessionStart"
+    SESSION_END = "SessionEnd"
     PRE_TOOL_USE = "PreToolUse"
     POST_TOOL_USE = "PostToolUse"
     USER_PROMPT_SUBMIT = "UserPromptSubmit"
@@ -223,7 +227,8 @@ class EventSchema:
         mapping = {
             # Claude Code
             HookType.SESSION_START: EventType.SESSION_START,
-            HookType.STOP: EventType.SESSION_END,
+            HookType.SESSION_END: EventType.SESSION_END,
+            HookType.STOP: EventType.ASSISTANT_RESPONSE,  # Stop is end of turn/interaction
             HookType.USER_PROMPT_SUBMIT: EventType.USER_PROMPT,
             HookType.PRE_TOOL_USE: EventType.TOOL_USE,
             HookType.POST_TOOL_USE: EventType.TOOL_USE,
