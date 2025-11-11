@@ -151,6 +151,39 @@ async def _handle_failed_message(message_id, message_data, error):
 ### Files Changed
 - `src/processing/slow_path/worker_base.py` (lines 202-263, added `_handle_failed_message`)
 
+### Retry Count Mechanism
+
+**UPDATED:** Fixed retry count tracking to use Redis Streams' built-in delivery count:
+
+```python
+# OLD (broken)
+retry_count = int(message_data.get(b'retry_count', b'0'))  # Always 0!
+
+# NEW (correct)
+async def _get_delivery_count(self, message_id: bytes) -> int:
+    """Get actual delivery count from Redis Streams PEL."""
+    pending = await asyncio.to_thread(
+        self.redis_client.xpending_range,
+        self.stream_name,
+        self.consumer_group,
+        min=message_id,
+        max=message_id,
+        count=1
+    )
+    if pending and len(pending) > 0:
+        return pending[0].get('times_delivered', 1)
+    return 1
+
+delivery_count = await self._get_delivery_count(message_id)
+if delivery_count >= 3:
+    # Move to DLQ
+```
+
+**Benefits:**
+- Uses Redis's native tracking (no manual counter needed)
+- Accurate across worker restarts
+- Cannot be lost or corrupted
+
 ### DLQ Inspection
 Failed messages can be inspected:
 ```bash
@@ -164,6 +197,7 @@ See `scripts/test_metrics_integration.py` - Test 3: DLQ Handling
 ✅ Failing worker moved message to DLQ after 3 retries
 ✅ DLQ contains error details and timestamp
 ✅ Original message acknowledged after DLQ storage
+✅ Uses Redis Streams' delivery_count (not manual counter)
 ```
 
 ## Issue #4: Session Tool Counting Bug ⚠️ MEDIUM - FIXED

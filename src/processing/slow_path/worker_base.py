@@ -209,24 +209,28 @@ class WorkerBase(ABC):
         """
         Handle a failed message by moving to DLQ after max retries.
 
+        Uses Redis Streams' XPENDING to get actual delivery_count tracked by Redis.
+
         Args:
             message_id: Redis stream message ID
             message_data: Message data
             error: Exception that caused the failure
         """
         try:
-            # Get retry count from message data (stored by previous attempts)
-            retry_count = int(message_data.get(b'retry_count', b'0'))
+            # CRITICAL FIX: Get actual delivery count from Redis Streams PEL
+            # Redis tracks delivery_count automatically - we don't need to store it in message
+            delivery_count = await self._get_delivery_count(message_id)
 
-            if retry_count >= 3:
+            if delivery_count >= 3:
                 # Max retries reached, move to DLQ
-                logger.warning(f"Moving message {message_id} to DLQ after {retry_count} retries")
+                logger.warning(f"Moving message {message_id} to DLQ after {delivery_count} delivery attempts")
 
                 # Add error info and timestamp to DLQ entry
                 dlq_data = dict(message_data)
                 dlq_data[b'error'] = str(error).encode('utf-8')
                 dlq_data[b'failed_at'] = str(time.time()).encode('utf-8')
                 dlq_data[b'original_message_id'] = message_id
+                dlq_data[b'delivery_count'] = str(delivery_count).encode('utf-8')
 
                 # Write to DLQ stream
                 await asyncio.to_thread(
@@ -243,15 +247,14 @@ class WorkerBase(ABC):
                     message_id
                 )
 
-                logger.info(f"Message {message_id} moved to DLQ")
+                logger.info(f"Message {message_id} moved to DLQ after {delivery_count} attempts")
 
             else:
                 # Don't ACK - message will be retried via PEL (Pending Entries List)
-                # Increment retry count for next attempt
-                logger.info(f"Message {message_id} will be retried (attempt {retry_count + 1}/3)")
+                logger.info(f"Message {message_id} will be retried (delivery attempt {delivery_count + 1}/3)")
 
-                # Note: We don't increment retry_count here because we don't ACK
-                # The next worker to claim this message from PEL will see it
+                # Redis will automatically redeliver from PEL after timeout
+                # delivery_count increments automatically on each delivery
 
         except Exception as dlq_error:
             logger.error(f"Failed to handle failed message: {dlq_error}")
@@ -262,6 +265,44 @@ class WorkerBase(ABC):
                 self.consumer_group,
                 message_id
             )
+
+    async def _get_delivery_count(self, message_id: bytes) -> int:
+        """
+        Get delivery count for a message from Redis Streams PEL.
+
+        Redis automatically tracks how many times a message has been delivered.
+
+        Args:
+            message_id: Redis stream message ID
+
+        Returns:
+            Number of times message has been delivered (0 if not in PEL)
+        """
+        try:
+            # XPENDING returns pending messages with delivery info
+            # Format: [[message_id, consumer, idle_time, delivery_count], ...]
+            pending = await asyncio.to_thread(
+                self.redis_client.xpending_range,
+                self.stream_name,
+                self.consumer_group,
+                min=message_id,
+                max=message_id,
+                count=1
+            )
+
+            if pending and len(pending) > 0:
+                # pending[0] is dict with 'message_id', 'consumer', 'time_since_delivered', 'times_delivered'
+                entry = pending[0]
+                # The 'times_delivered' field is the delivery count
+                return entry.get('times_delivered', 1)
+
+            # Not in PEL (already ACK'd or first attempt)
+            return 1
+
+        except Exception as e:
+            logger.warning(f"Could not get delivery count for {message_id}: {e}")
+            # Default to 1 if we can't determine
+            return 1
 
     @abstractmethod
     async def process_event(self, event: Dict[str, Any]) -> None:

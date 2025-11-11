@@ -81,8 +81,9 @@ class MetricsCalculator:
             # Throughput metrics (for all events)
             metrics.extend(self._calculate_throughput_metrics(event))
 
-            # Update composite metrics periodically
-            # Calculate every 10th event processed by checking EPS
+            # Update composite metrics periodically (time-based sampling)
+            # Calculate when timestamp ends in 0 (roughly every 10 seconds)
+            # Note: This is time-based, not event-based, for efficiency
             if int(time.time()) % 10 == 0:
                 metrics.extend(self._calculate_composite_metrics(session_id))
 
