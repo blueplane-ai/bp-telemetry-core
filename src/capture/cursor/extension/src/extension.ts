@@ -6,17 +6,15 @@
  * Blueplane Telemetry Extension for Cursor
  *
  * Main entry point for the VSCode extension.
- * Manages session lifecycle and database monitoring.
+ * Manages session lifecycle.
  */
 
 import * as vscode from "vscode";
 import { SessionManager } from "./sessionManager";
-import { DatabaseMonitor } from "./databaseMonitor";
 import { QueueWriter } from "./queueWriter";
 import { ExtensionConfig } from "./types";
 
 let sessionManager: SessionManager | undefined;
-let databaseMonitor: DatabaseMonitor | undefined;
 let queueWriter: QueueWriter | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 
@@ -43,33 +41,6 @@ export async function activate(context: vscode.ExtensionContext) {
       console.error("Failed to initialize Blueplane components:", error);
       vscode.window.showErrorMessage(
         `Blueplane: Failed to initialize. Error: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-      return;
-    }
-
-    // Create database monitor after sessionManager is initialized
-    // Use setter method to avoid any closure capture issues during construction
-    try {
-      databaseMonitor = new DatabaseMonitor(queueWriter);
-      // Set the session info getter after construction to avoid initialization order issues
-      databaseMonitor.setSessionInfoGetter(() => {
-        if (!sessionManager) {
-          return null;
-        }
-        const session = sessionManager.getCurrentSession();
-        return session
-          ? {
-              sessionId: session.sessionId,
-              workspaceHash: session.workspaceHash,
-            }
-          : null;
-      });
-    } catch (error) {
-      console.error("Failed to initialize DatabaseMonitor:", error);
-      vscode.window.showErrorMessage(
-        `Blueplane: Failed to initialize DatabaseMonitor. Error: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
@@ -103,36 +74,7 @@ export async function activate(context: vscode.ExtensionContext) {
       // Continue anyway - session is not critical
     }
 
-    // Start database monitoring if enabled
-    if (config.databaseMonitoring) {
-      try {
-        const monitoringStarted = await databaseMonitor.startMonitoring();
-        if (!monitoringStarted) {
-          console.warn("Database monitoring could not be started");
-        }
-      } catch (error) {
-        console.error("Failed to start database monitoring:", error);
-        // Continue anyway - database monitoring is optional
-      }
-    }
-
-    // Create status bar item
-    try {
-      statusBarItem = vscode.window.createStatusBarItem(
-        vscode.StatusBarAlignment.Right,
-        100
-      );
-      statusBarItem.text = "$(pulse) Blueplane";
-      statusBarItem.tooltip = "Blueplane Telemetry Active";
-      statusBarItem.command = "blueplane.showStatus";
-      statusBarItem.show();
-      context.subscriptions.push(statusBarItem);
-    } catch (error) {
-      console.error("Failed to create status bar item:", error);
-      // Continue anyway - status bar is not critical
-    }
-
-    // Register commands
+    // Register commands first (before creating status bar item that references them)
     try {
       context.subscriptions.push(
         vscode.commands.registerCommand("blueplane.showStatus", () => {
@@ -193,7 +135,33 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     } catch (error) {
       console.error("Failed to register commands:", error);
-      // Continue anyway
+      // Continue anyway - commands are not critical
+    }
+
+    // Create status bar item after commands are registered
+    try {
+      statusBarItem = vscode.window.createStatusBarItem(
+        vscode.StatusBarAlignment.Right,
+        100
+      );
+      statusBarItem.text = "$(pulse) Blueplane";
+      statusBarItem.tooltip = "Blueplane Telemetry Active";
+      statusBarItem.command = "blueplane.showStatus";
+      context.subscriptions.push(statusBarItem);
+      
+      // Show status bar item after a short delay to ensure UI is ready
+      setTimeout(() => {
+        try {
+          if (statusBarItem) {
+            statusBarItem.show();
+          }
+        } catch (error) {
+          console.error("Failed to show status bar item:", error);
+        }
+      }, 100);
+    } catch (error) {
+      console.error("Failed to create status bar item:", error);
+      // Continue anyway - status bar is not critical
     }
 
     console.log("Blueplane Telemetry extension activated successfully");
@@ -212,11 +180,6 @@ export async function activate(context: vscode.ExtensionContext) {
  */
 export async function deactivate() {
   console.log("Blueplane Telemetry extension deactivating...");
-
-  // Stop monitoring
-  if (databaseMonitor) {
-    databaseMonitor.stopMonitoring();
-  }
 
   // Stop session
   if (sessionManager) {
@@ -245,7 +208,6 @@ function loadConfiguration(): ExtensionConfig {
 
   return {
     enabled: config.get<boolean>("enabled", true),
-    databaseMonitoring: config.get<boolean>("databaseMonitoring", true),
     redisHost: config.get<string>("redisHost", "localhost"),
     redisPort: config.get<number>("redisPort", 6379),
   };

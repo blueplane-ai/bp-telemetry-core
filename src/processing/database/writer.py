@@ -110,11 +110,26 @@ class SQLiteBatchWriter:
         if not events:
             return []
 
+        # Track database_trace events for logging
+        db_trace_indices = [
+            i for i, event in enumerate(events)
+            if event.get('event_type') == 'database_trace'
+        ]
+
         # Prepare batch data
         rows = []
-        for event in events:
+        for i, event in enumerate(events):
             # Extract indexed fields
             fields = self._extract_indexed_fields(event)
+
+            # Log database_trace events being written
+            if i in db_trace_indices:
+                logger.info(
+                    f"Writing database_trace event: event_id={fields['event_id'][:20]}..., "
+                    f"workspace_hash={fields['workspace_hash']}, "
+                    f"session_id={fields['session_id'][:20] if fields['session_id'] else 'N/A'}..., "
+                    f"event_type={fields['event_type']}"
+                )
 
             # Compress full event
             compressed_data = self._compress_event(event)
@@ -152,10 +167,24 @@ class SQLiteBatchWriter:
                 sequences.reverse()  # Return in insertion order
 
             logger.debug(f"Wrote batch of {len(events)} events, sequences: {sequences[0]}-{sequences[-1]}")
+            
+            # Enhanced logging for database_trace events
+            if db_trace_indices:
+                db_trace_sequences = [sequences[i] for i in db_trace_indices]
+                logger.info(
+                    f"Successfully wrote {len(db_trace_sequences)} database_trace events to SQLite: "
+                    f"sequences {db_trace_sequences[:5] if db_trace_sequences else 'none'}"
+                )
+            
             return sequences
 
         except Exception as e:
-            logger.error(f"Failed to write batch: {e}")
+            logger.error(f"Failed to write batch: {e}", exc_info=True)
+            if db_trace_indices:
+                logger.error(
+                    f"Failed batch included {len(db_trace_indices)} database_trace events at indices: "
+                    f"{db_trace_indices[:5]}"
+                )
             raise
 
     async def write_batch(self, events: List[Dict[str, Any]]) -> List[int]:

@@ -137,6 +137,17 @@ class FastPathConsumer:
             if "session_id" not in event:
                 event["session_id"] = event.get("external_session_id", "")
 
+            # Enhanced logging for database_trace events
+            event_type = event.get("event_type", "")
+            if event_type == "database_trace":
+                metadata = event.get("metadata", {})
+                workspace_hash = metadata.get("workspace_hash") if isinstance(metadata, dict) else None
+                logger.info(
+                    f"Decoded database_trace event: msg_id={message_id[:20]}..., "
+                    f"event_type={event_type}, workspace_hash={workspace_hash}, "
+                    f"session_id={event.get('session_id', '')[:20]}..."
+                )
+
             return event
         except Exception as exc:
             logger.error(f"Failed to parse event from message {message_id}: {exc}")
@@ -202,16 +213,39 @@ class FastPathConsumer:
         # Extract events (skip None events from parse errors)
         events = []
         valid_message_ids = []
+        db_trace_events = []
+        
         for msg in messages:
             if msg['event'] is not None:
-                events.append(msg['event'])
+                event = msg['event']
+                events.append(event)
                 valid_message_ids.append(msg['id'])
+                
+                # Track database_trace events for detailed logging
+                if event.get('event_type') == 'database_trace':
+                    metadata = event.get('metadata', {})
+                    workspace_hash = metadata.get('workspace_hash') if isinstance(metadata, dict) else None
+                    db_trace_events.append({
+                        'msg_id': msg['id'],
+                        'workspace_hash': workspace_hash,
+                        'session_id': event.get('session_id', ''),
+                    })
             else:
                 # Invalid event - send to DLQ immediately
+                logger.warning(f"Invalid event (None) for message {msg['id']}, sending to DLQ")
                 await self._handle_failed_message(msg['id'], msg.get('event'), retry_count=self.max_retries)
 
         if not events:
+            logger.debug("No valid events to process in batch")
             return []
+
+        # Log database_trace events being processed
+        if db_trace_events:
+            workspace_hashes = [e['workspace_hash'] for e in db_trace_events[:5]]
+            logger.info(
+                f"Processing batch with {len(db_trace_events)} database_trace events: "
+                f"{', '.join([f'wh={wh}' for wh in workspace_hashes])}"
+            )
 
         try:
             # Write to SQLite (runs in thread pool, non-blocking)
@@ -221,6 +255,17 @@ class FastPathConsumer:
             
             # Track write latency for backpressure
             self.write_times.append(write_duration)
+            
+            # Enhanced logging for database_trace events
+            if db_trace_events and sequences:
+                db_trace_sequences = [
+                    seq for seq, event in zip(sequences, events)
+                    if event.get('event_type') == 'database_trace'
+                ]
+                logger.info(
+                    f"Successfully wrote {len(db_trace_sequences)} database_trace events: "
+                    f"sequences {db_trace_sequences[:5] if db_trace_sequences else 'none'}"
+                )
             
             # Publish CDC events (fire-and-forget, synchronous call)
             for sequence, event in zip(sequences, events):
@@ -235,7 +280,12 @@ class FastPathConsumer:
             return valid_message_ids
 
         except Exception as e:
-            logger.error(f"Failed to process batch: {e}")
+            logger.error(f"Failed to process batch: {e}", exc_info=True)
+            if db_trace_events:
+                logger.error(
+                    f"Failed batch included {len(db_trace_events)} database_trace events: "
+                    f"{', '.join([e['msg_id'][:20] for e in db_trace_events[:3]])}"
+                )
             # Don't ACK messages - they'll retry via PEL
             return []
 

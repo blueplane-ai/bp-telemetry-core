@@ -460,4 +460,3 @@ ORDER BY timestamp;                                       │
 - [Architecture Overview](ARCHITECTURE.md)
 - [Database Schema](architecture/layer2_db_architecture.md)
 - [Conversation Reconstruction](architecture/layer2_conversation_reconstruction.md)
-
