@@ -22,6 +22,7 @@ from .database.schema import create_schema
 from .database.writer import SQLiteBatchWriter
 from .fast_path.consumer import FastPathConsumer
 from .fast_path.cdc_publisher import CDCPublisher
+from .slow_path.worker_pool import WorkerPoolManager
 from .cursor.session_monitor import SessionMonitor
 from .cursor.database_monitor import CursorDatabaseMonitor
 from .claude_code.transcript_monitor import ClaudeCodeTranscriptMonitor
@@ -33,11 +34,12 @@ logger = logging.getLogger(__name__)
 class TelemetryServer:
     """
     Main server for telemetry processing.
-    
+
     Manages:
     - SQLite database initialization
     - Redis connection
     - Fast path consumer
+    - Slow path worker pool
     - Graceful shutdown
     """
 
@@ -51,12 +53,13 @@ class TelemetryServer:
         """
         self.config = config or Config()
         self.db_path = db_path or str(Path.home() / ".blueplane" / "telemetry.db")
-        
+
         self.sqlite_client: Optional[SQLiteClient] = None
         self.sqlite_writer: Optional[SQLiteBatchWriter] = None
         self.redis_client: Optional[redis.Redis] = None
         self.cdc_publisher: Optional[CDCPublisher] = None
         self.consumer: Optional[FastPathConsumer] = None
+        self.worker_pool: Optional[WorkerPoolManager] = None
         self.session_monitor: Optional[SessionMonitor] = None
         self.cursor_monitor: Optional[CursorDatabaseMonitor] = None
         self.claude_code_monitor: Optional[ClaudeCodeTranscriptMonitor] = None
@@ -181,6 +184,21 @@ class TelemetryServer:
 
         logger.info("Claude Code transcript monitor initialized")
 
+    def _initialize_worker_pool(self) -> None:
+        """Initialize slow path worker pool."""
+        logger.info("Initializing worker pool")
+
+        cdc_config = self.config.get_stream_config("cdc")
+
+        self.worker_pool = WorkerPoolManager(
+            redis_client=self.redis_client,
+            sqlite_client=self.sqlite_client,
+            stream_name=cdc_config.name,
+            consumer_group="workers",
+        )
+
+        logger.info("Worker pool initialized")
+
     async def start(self) -> None:
         """Start the server."""
         if self.running:
@@ -194,6 +212,7 @@ class TelemetryServer:
             self._initialize_database()
             self._initialize_redis()
             self._initialize_consumer()
+            self._initialize_worker_pool()
             self._initialize_cursor_monitor()
             self._initialize_claude_code_monitor()
 
@@ -204,6 +223,10 @@ class TelemetryServer:
 
             if self.claude_code_monitor:
                 await self.claude_code_monitor.start()
+
+            # Start worker pool
+            if self.worker_pool:
+                await self.worker_pool.start()
 
             # Start consumer (this blocks)
             self.running = True
@@ -229,6 +252,9 @@ class TelemetryServer:
 
         if self.session_monitor:
             await self.session_monitor.stop()
+
+        if self.worker_pool:
+            await self.worker_pool.stop()
 
         if self.consumer:
             self.consumer.stop()
