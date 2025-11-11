@@ -368,18 +368,44 @@ class FastPathConsumer:
                 )
 
                 # Process claimed messages
+                # Parse them the same way as new messages (they have the same field structure)
                 if claimed:
                     messages = []
                     for msg_id, fields in claimed:
-                        event_data = fields.get(b'data', b'{}')
+                        msg_id_str = msg_id.decode('utf-8') if isinstance(msg_id, bytes) else str(msg_id)
+                        
                         try:
-                            event = json.loads(event_data.decode('utf-8'))
+                            event = {}
+                            
+                            def decode_field(key, value):
+                                if isinstance(value, bytes):
+                                    return value.decode('utf-8')
+                                return str(value)
+                            
+                            for key, value in fields.items():
+                                key_str = key.decode('utf-8') if isinstance(key, bytes) else str(key)
+                                val_str = decode_field(key_str, value)
+                                
+                                if key_str in ('payload', 'metadata'):
+                                    try:
+                                        event[key_str] = json.loads(val_str)
+                                    except json.JSONDecodeError:
+                                        event[key_str] = {}
+                                else:
+                                    event[key_str] = val_str
+                            
+                            # Ensure required fields exist
+                            if 'event_id' not in event:
+                                event['event_id'] = msg_id_str
+                            if 'session_id' not in event:
+                                event['session_id'] = event.get('external_session_id', '')
+                            
                             messages.append({
-                                'id': msg_id.decode('utf-8') if isinstance(msg_id, bytes) else msg_id,
+                                'id': msg_id_str,
                                 'event': event
                             })
                         except Exception as e:
-                            logger.error(f"Failed to parse claimed message: {e}")
+                            logger.error(f"Failed to parse claimed message {msg_id_str}: {e}")
 
                     if messages:
                         processed_ids = await self._process_batch(messages)
