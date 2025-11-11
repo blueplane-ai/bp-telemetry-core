@@ -96,9 +96,11 @@ class RedisMetricsStorage:
             self.redis_client.hset(latest_key, name, str(value))
             self.redis_client.expire(latest_key, 86400)  # 1 day expiry
 
-            # Store time-series data in sorted set (score = timestamp)
+            # Store time-series data in sorted set (score = timestamp, member = timestamp:value)
+            # Using timestamp:value as member ensures uniqueness even for duplicate values
             ts_key = f"{key}:ts"
-            self.redis_client.zadd(ts_key, {str(value): timestamp})
+            member = f"{timestamp}:{value}"
+            self.redis_client.zadd(ts_key, {member: timestamp})
 
             # Set retention based on category
             retention_seconds = self._get_retention_seconds(category)
@@ -181,11 +183,17 @@ class RedisMetricsStorage:
             )
 
             # Convert to list of (timestamp, value) tuples
+            # Member format is "timestamp:value"
             result = []
-            for value_bytes, timestamp in data:
+            for member_bytes, score_timestamp in data:
                 try:
-                    value = float(value_bytes.decode('utf-8'))
-                    result.append((timestamp, value))
+                    member = member_bytes.decode('utf-8')
+                    # Parse timestamp:value format
+                    if ':' in member:
+                        timestamp_str, value_str = member.split(':', 1)
+                        timestamp = float(timestamp_str)
+                        value = float(value_str)
+                        result.append((timestamp, value))
                 except (ValueError, AttributeError):
                     continue
 

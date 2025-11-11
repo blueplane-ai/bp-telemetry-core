@@ -197,11 +197,15 @@ class TelemetryServer:
 
         cdc_config = self.config.get_stream_config("cdc")
 
+        # Get worker configuration from config file
+        worker_config = self.config.get("workers")
+
         self.worker_pool = WorkerPoolManager(
             redis_client=self.redis_client,
             sqlite_client=self.sqlite_client,
             stream_name=cdc_config.name,
             consumer_group="workers",
+            worker_config=worker_config,
         )
 
         logger.info("Worker pool initialized")

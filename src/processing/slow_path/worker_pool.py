@@ -40,6 +40,7 @@ class WorkerPoolManager:
         sqlite_client: SQLiteClient,
         stream_name: str = "cdc:events",
         consumer_group: str = "workers",
+        worker_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize worker pool manager.
@@ -49,6 +50,8 @@ class WorkerPoolManager:
             sqlite_client: SQLite client instance
             stream_name: CDC stream name
             consumer_group: Consumer group name
+            worker_config: Worker configuration dict (from config/redis.yaml)
+                          If None, uses default configuration
         """
         self.redis_client = redis_client
         self.sqlite_client = sqlite_client
@@ -59,8 +62,8 @@ class WorkerPoolManager:
         self.worker_tasks: List[asyncio.Task] = []
         self.running = False
 
-        # Worker configuration
-        self.worker_config = {
+        # Worker configuration (use provided config or defaults)
+        self.worker_config = worker_config or {
             'metrics': {
                 'count': 2,  # Number of metrics workers
                 'enabled': True,

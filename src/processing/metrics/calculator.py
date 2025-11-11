@@ -141,10 +141,15 @@ class MetricsCalculator:
         metrics = []
         tool_name = event.get('tool_name', 'unknown')
         session_id = event.get('session_id', '')
-        success = event.get('payload', {}).get('success', True)
 
-        # Update shared counters
-        self.state.increment_tool_count(tool_name, success)
+        # Only track success if explicitly provided (conservative approach)
+        # Defaults to None to avoid artificially inflating success rates
+        payload = event.get('payload', {})
+        success = payload.get('success') if 'success' in payload else None
+
+        # Update shared counters (only if success status is explicitly provided)
+        if success is not None:
+            self.state.increment_tool_count(tool_name, success)
 
         # CRITICAL FIX: Increment session tool count (Issue #4 from review)
         self.state.increment_session_tool_count(session_id)
@@ -186,9 +191,13 @@ class MetricsCalculator:
         metrics = []
         payload = event.get('payload', {})
 
-        # Track if code was accepted
-        accepted = payload.get('accepted', True)
-        self.state.add_acceptance(accepted)
+        # Only track acceptance if explicitly provided (conservative approach)
+        # Defaults to None to avoid artificially inflating acceptance rates
+        accepted = payload.get('accepted') if 'accepted' in payload else None
+
+        # Track acceptance (only if explicitly provided)
+        if accepted is not None:
+            self.state.add_acceptance(accepted)
 
         # Calculate acceptance rate from shared state
         acceptance_rate = self.state.get_acceptance_rate()

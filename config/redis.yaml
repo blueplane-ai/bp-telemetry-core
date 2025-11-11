@@ -58,6 +58,13 @@ streams:
     count: 10  # Process fewer at a time for slow path
     retry_timeout_ms: 600000  # 10 minutes before retry
 
+# Worker pool configuration
+workers:
+  metrics:
+    count: 2  # Number of metrics workers
+    enabled: true
+  # Future: conversation, ai_insights workers
+
 # Monitoring and health checks
 monitoring:
   health_check_enabled: true
