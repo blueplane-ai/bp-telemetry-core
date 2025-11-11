@@ -60,8 +60,8 @@ Hooks are installed globally at: `~/.claude/hooks/telemetry/`
 
 7. **`stop.py`** - Stop hook
    - Fires when assistant stops generating (end of turn/interaction)
-   - Captures completion of assistant response
-   - Input: `{"session_id": "..."}`
+   - Captures completion of assistant response and incremental transcript
+   - Input: `{"session_id": "...", "transcript_path": "...", "stop_hook_active": true}`
 
 ## Installation
 
@@ -217,25 +217,29 @@ Configuration files are stored in `~/.blueplane/`:
 5. MessageQueueWriter sends to Redis Streams
 6. Fast path consumer processes event
 7. Event written to SQLite raw_traces table
-8. (Stop hook only) Transcript monitor processes .jsonl file
+8. (Stop/SessionEnd hooks) Transcript monitor processes .jsonl file if provided
 ```
 
 ## Transcript Processing
 
-The **SessionEnd hook** has special behavior:
+Both the **Stop** and **SessionEnd** hooks have special transcript processing behavior:
 
-1. When SessionEnd hook fires with `transcript_path` in payload
-2. ClaudeCodeTranscriptMonitor detects the SessionEnd event
+1. When Stop or SessionEnd hook fires with `transcript_path` in payload
+2. ClaudeCodeTranscriptMonitor detects the event
 3. Monitor reads the .jsonl transcript file
 4. Each transcript entry becomes a trace event
 5. Trace events are sent back to Redis for processing
 6. All traces written to raw_traces table
 
-This provides complete conversation history for analytics.
+This provides conversation history for analytics:
+- **Stop hook**: Processes transcript after each turn (incremental capture)
+- **SessionEnd hook**: Processes final transcript when session ends (complete capture)
 
-**Note**: The **Stop** hook is different from **SessionEnd**:
-- **Stop**: Fires at the end of each assistant response (end of turn)
-- **SessionEnd**: Fires when Claude Code closes (end of session)
+**Note**: The hooks serve different purposes:
+- **Stop**: Fires at the end of each assistant response (end of turn) - processes incremental transcript
+- **SessionEnd**: Fires when Claude Code closes (end of session) - processes final transcript
+
+Deduplication ensures the same transcript is not processed twice.
 
 ## Troubleshooting
 

@@ -57,8 +57,9 @@ class ClaudeCodeTranscriptMonitor:
         self.consumer_name = consumer_name
         self.poll_interval = poll_interval
 
-        # Track processed sessions to avoid duplicates
-        self.processed_sessions: Set[str] = set()
+        # Track processed transcripts to avoid duplicates
+        # Key format: "session_id:transcript_path_hash"
+        self.processed_transcripts: Set[str] = set()
 
         # Running flag
         self.running = False
@@ -155,23 +156,18 @@ class ClaudeCodeTranscriptMonitor:
             for k, v in data.items()
         }
 
-        # Check if this is a SessionEnd hook from claude_code platform
+        # Check if this is a Stop or SessionEnd hook from claude_code platform
         platform = decoded_data.get('platform', '')
         hook_type = decoded_data.get('hook_type', '')
 
-        if platform != 'claude_code' or hook_type != 'SessionEnd':
-            # Not a Claude Code SessionEnd hook, skip
+        if platform != 'claude_code' or hook_type not in ('Stop', 'SessionEnd'):
+            # Not a Claude Code Stop or SessionEnd hook, skip
             return
 
         # Extract session_id and payload
         session_id = decoded_data.get('external_session_id')
         if not session_id:
-            logger.warning("SessionEnd hook missing session_id")
-            return
-
-        # Check if already processed
-        if session_id in self.processed_sessions:
-            logger.debug("Session %s already processed, skipping", session_id)
+            logger.warning("%s hook missing session_id", hook_type)
             return
 
         # Parse payload to get transcript_path
@@ -184,15 +180,27 @@ class ClaudeCodeTranscriptMonitor:
 
         transcript_path = payload.get('transcript_path')
         if not transcript_path:
-            logger.debug("SessionEnd hook has no transcript_path, skipping")
+            logger.debug("%s hook has no transcript_path, skipping", hook_type)
+            return
+
+        # Check if this specific transcript has already been processed
+        # Use hash of transcript path to create unique key
+        import hashlib
+        path_hash = hashlib.sha256(str(transcript_path).encode()).hexdigest()[:16]
+        dedup_key = f"{session_id}:{path_hash}"
+
+        if dedup_key in self.processed_transcripts:
+            logger.debug("Transcript %s for session %s already processed, skipping",
+                        transcript_path, session_id)
             return
 
         # Process the transcript
-        logger.info("Processing transcript for session %s: %s", session_id, transcript_path)
+        logger.info("Processing transcript for session %s from %s hook: %s",
+                   session_id, hook_type, transcript_path)
         await self._process_transcript(session_id, transcript_path)
 
         # Mark as processed
-        self.processed_sessions.add(session_id)
+        self.processed_transcripts.add(dedup_key)
 
     async def _process_transcript(self, session_id: str, transcript_path: str) -> None:
         """

@@ -30,12 +30,23 @@ class StopHook(ClaudeCodeHookBase):
         """Execute hook logic."""
         # Extract stop data from stdin
         # Stop hook fires at the end of each assistant response
+        transcript_path = self.input_data.get('transcript_path')
+        stop_hook_active = self.input_data.get('stop_hook_active', True)
 
         # Build event payload
         payload = {
             'session_id': self.session_id,
             'stop_type': 'assistant_response_complete',
+            'stop_hook_active': stop_hook_active,
         }
+
+        if transcript_path:
+            payload['has_transcript'] = True
+            # Store path hash instead of full path for privacy
+            import hashlib
+            payload['transcript_path_hash'] = hashlib.sha256(str(transcript_path).encode()).hexdigest()[:16]
+            # Also store the actual path for the transcript monitor to use
+            payload['transcript_path'] = transcript_path
 
         # Build and enqueue event
         event = self.build_event(
