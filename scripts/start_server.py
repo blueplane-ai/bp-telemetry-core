@@ -8,7 +8,6 @@ Start the Blueplane Telemetry processing server.
 """
 
 import sys
-import asyncio
 from pathlib import Path
 
 # Add project root to path
@@ -18,5 +17,5 @@ sys.path.insert(0, str(project_root))
 from src.processing.server import main
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
 

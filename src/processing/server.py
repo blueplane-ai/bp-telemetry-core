@@ -8,10 +8,10 @@ Main server for Blueplane Telemetry Core processing layer.
 Orchestrates fast path consumer, database initialization, and graceful shutdown.
 """
 
-import asyncio
 import logging
 import signal
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -61,6 +61,7 @@ class TelemetryServer:
         self.cursor_monitor: Optional[CursorDatabaseMonitor] = None
         self.claude_code_monitor: Optional[ClaudeCodeTranscriptMonitor] = None
         self.running = False
+        self.monitor_threads: list[threading.Thread] = []
 
     def _initialize_database(self) -> None:
         """Initialize SQLite database and schema."""
@@ -133,7 +134,6 @@ class TelemetryServer:
     def _initialize_cursor_monitor(self) -> None:
         """Initialize Cursor database monitor."""
         # Check if cursor monitoring is enabled (default: True)
-        # For now, we'll enable it by default. Can be made configurable later.
         enabled = True  # TODO: Load from config
 
         if not enabled:
@@ -181,7 +181,7 @@ class TelemetryServer:
 
         logger.info("Claude Code transcript monitor initialized")
 
-    async def start(self) -> None:
+    def start(self) -> None:
         """Start the server."""
         if self.running:
             logger.warning("Server already running")
@@ -197,23 +197,64 @@ class TelemetryServer:
             self._initialize_cursor_monitor()
             self._initialize_claude_code_monitor()
 
-            # Start monitors (if enabled) - runs concurrently
+            # Start monitors in background threads (if enabled)
             if self.session_monitor and self.cursor_monitor:
-                await self.session_monitor.start()
-                await self.cursor_monitor.start()
+                def run_session_monitor():
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.session_monitor.start())
+                
+                def run_cursor_monitor():
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.cursor_monitor.start())
+                
+                session_thread = threading.Thread(target=run_session_monitor, daemon=True)
+                cursor_thread = threading.Thread(target=run_cursor_monitor, daemon=True)
+                session_thread.start()
+                cursor_thread.start()
+                self.monitor_threads.extend([session_thread, cursor_thread])
 
             if self.claude_code_monitor:
-                await self.claude_code_monitor.start()
+                def run_claude_code_monitor():
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.claude_code_monitor._monitor_loop())
+                
+                # Set running flag
+                self.claude_code_monitor.running = True
+                # Ensure consumer group exists
+                try:
+                    self.redis_client.xgroup_create(
+                        self.claude_code_monitor.stream_name,
+                        self.claude_code_monitor.consumer_group,
+                        id='0',
+                        mkstream=True
+                    )
+                    logger.info("Created consumer group: %s", self.claude_code_monitor.consumer_group)
+                except redis.exceptions.ResponseError as e:
+                    if "BUSYGROUP" not in str(e):
+                        logger.error("Failed to create consumer group: %s", e)
+                        raise
+                    logger.debug("Consumer group already exists: %s", self.claude_code_monitor.consumer_group)
+                
+                claude_thread = threading.Thread(target=run_claude_code_monitor, daemon=True)
+                claude_thread.start()
+                self.monitor_threads.append(claude_thread)
+                logger.info("Claude Code transcript monitor started")
 
             # Start consumer (this blocks)
             self.running = True
-            await self.consumer.run()
+            self.consumer.run()
 
         except Exception as e:
             logger.error(f"Failed to start server: {e}")
             raise
 
-    async def stop(self) -> None:
+    def stop(self) -> None:
         """Stop the server gracefully."""
         if not self.running:
             return
@@ -222,13 +263,22 @@ class TelemetryServer:
         self.running = False
 
         if self.claude_code_monitor:
-            await self.claude_code_monitor.stop()
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.claude_code_monitor.stop())
 
         if self.cursor_monitor:
-            await self.cursor_monitor.stop()
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.cursor_monitor.stop())
 
         if self.session_monitor:
-            await self.session_monitor.stop()
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.session_monitor.stop())
 
         if self.consumer:
             self.consumer.stop()
@@ -238,9 +288,9 @@ class TelemetryServer:
 
         logger.info("Server stopped")
 
-    async def run(self) -> None:
+    def run(self) -> None:
         """Run the server (alias for start)."""
-        await self.start()
+        self.start()
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -252,7 +302,7 @@ def setup_logging(level: str = "INFO") -> None:
     )
 
 
-async def main() -> None:
+def main() -> None:
     """Main entry point."""
     setup_logging()
 
@@ -262,23 +312,22 @@ async def main() -> None:
     # Setup signal handlers for graceful shutdown
     def signal_handler(sig, frame):
         logger.info("Received shutdown signal")
-        asyncio.create_task(server.stop())
+        server.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        await server.start()
+        server.start()
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception as e:
         logger.error(f"Server error: {e}")
         sys.exit(1)
     finally:
-        await server.stop()
+        server.stop()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
-
+    main()

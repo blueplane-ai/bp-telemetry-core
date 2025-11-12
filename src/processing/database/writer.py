@@ -98,7 +98,7 @@ class SQLiteBatchWriter:
     def write_batch_sync(self, events: List[Dict[str, Any]]) -> List[int]:
         """
         Synchronous batch write (called from thread pool).
-        
+
         This is the actual implementation that runs in a thread.
 
         Args:
@@ -110,26 +110,11 @@ class SQLiteBatchWriter:
         if not events:
             return []
 
-        # Track database_trace events for logging
-        db_trace_indices = [
-            i for i, event in enumerate(events)
-            if event.get('event_type') == 'database_trace'
-        ]
-
         # Prepare batch data
         rows = []
-        for i, event in enumerate(events):
+        for event in events:
             # Extract indexed fields
             fields = self._extract_indexed_fields(event)
-
-            # Log database_trace events being written
-            if i in db_trace_indices:
-                logger.info(
-                    f"Writing database_trace event: event_id={fields['event_id'][:20]}..., "
-                    f"workspace_hash={fields['workspace_hash']}, "
-                    f"session_id={fields['session_id'][:20] if fields['session_id'] else 'N/A'}..., "
-                    f"event_type={fields['event_type']}"
-                )
 
             # Compress full event
             compressed_data = self._compress_event(event)
@@ -155,42 +140,27 @@ class SQLiteBatchWriter:
         # Batch insert
         try:
             # Use a single connection for both insert and sequence retrieval
-            # This ensures we get the correct sequences for the batch we just inserted
             with self.client.get_connection() as conn:
                 # Insert batch
                 conn.executemany(INSERT_QUERY, rows)
-                
+
                 # Get sequence numbers immediately after insert (same connection)
-                # Use last_insert_rowid() to get the last sequence, then calculate backwards
                 cursor = conn.execute("SELECT last_insert_rowid()")
                 last_rowid = cursor.fetchone()[0]
-                
+
                 # Calculate sequence numbers: if we inserted N rows, sequences are
                 # last_rowid - (N-1) through last_rowid
                 sequences = list(range(last_rowid - len(rows) + 1, last_rowid + 1))
-                
+
                 # Commit the transaction
                 conn.commit()
 
             logger.debug(f"Wrote batch of {len(events)} events, sequences: {sequences[0]}-{sequences[-1]}")
             
-            # Enhanced logging for database_trace events
-            if db_trace_indices:
-                db_trace_sequences = [sequences[i] for i in db_trace_indices]
-                logger.info(
-                    f"Successfully wrote {len(db_trace_sequences)} database_trace events to SQLite: "
-                    f"sequences {db_trace_sequences[:5] if db_trace_sequences else 'none'}"
-                )
-            
             return sequences
 
         except Exception as e:
             logger.error(f"Failed to write batch: {e}", exc_info=True)
-            if db_trace_indices:
-                logger.error(
-                    f"Failed batch included {len(db_trace_indices)} database_trace events at indices: "
-                    f"{db_trace_indices[:5]}"
-                )
             raise
 
     async def write_batch(self, events: List[Dict[str, Any]]) -> List[int]:
@@ -209,8 +179,8 @@ class SQLiteBatchWriter:
             List of sequence numbers for written events
         """
         # Run synchronous SQLite operations in thread pool
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.write_batch_sync, events)
+        result = await asyncio.to_thread(self.write_batch_sync, events)
+        return result
 
     def get_by_sequence(self, sequence: int) -> Optional[Dict[str, Any]]:
         """
