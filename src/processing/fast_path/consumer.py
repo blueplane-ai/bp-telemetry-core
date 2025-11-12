@@ -141,6 +141,53 @@ class FastPathConsumer:
             logger.error(f"Failed to parse event from message {message_id}: {exc}")
             return None
 
+    def _read_pending_messages(self, count: int = 100) -> List[Dict[str, Any]]:
+        """
+        Read pending messages that are already assigned to this consumer.
+        
+        Uses XREADGROUP with "0" to read messages from PEL that belong to this consumer.
+        
+        Args:
+            count: Maximum number of messages to read
+            
+        Returns:
+            List of message dictionaries with 'id' and 'event' keys
+        """
+        try:
+            # Read pending messages assigned to this consumer using "0"
+            # "0" means read from PEL (Pending Entries List) for this consumer
+            messages = self.redis_client.xreadgroup(
+                self.consumer_group,
+                self.consumer_name,
+                {self.stream_name: "0"},
+                count=count,
+                block=0  # Non-blocking read
+            )
+
+            if not messages:
+                return []
+
+            # Parse messages
+            result = []
+            for stream_name, stream_messages in messages:
+                for message_id, fields in stream_messages:
+                    # Convert message_id to string
+                    msg_id = message_id.decode('utf-8') if isinstance(message_id, bytes) else str(message_id)
+                    event = self._decode_stream_message(msg_id, fields)
+                    result.append({
+                        'id': msg_id,
+                        'event': event
+                    })
+
+            return result
+
+        except redis.ConnectionError as e:
+            logger.error(f"Redis connection error reading pending: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Error reading pending messages: {e}")
+            return []
+
     def _read_messages(self) -> List[Dict[str, Any]]:
         """
         Read messages from Redis Streams using XREADGROUP.
@@ -345,21 +392,43 @@ class FastPathConsumer:
         
         return False
 
+    def _get_pending_count(self) -> int:
+        """Get total count of pending messages in the consumer group."""
+        try:
+            pending_info = self.redis_client.xpending(self.stream_name, self.consumer_group)
+            if isinstance(pending_info, (list, tuple)) and len(pending_info) >= 1:
+                return int(pending_info[0])
+            return 0
+        except Exception as e:
+            logger.debug(f"Failed to get pending count: {e}")
+            return 0
+
     def _process_pending_messages(self) -> None:
         """Process pending messages from PEL (retry failed messages)."""
         try:
-            # Get pending messages for this consumer
+            # Get total pending count to determine batch size
+            total_pending = self._get_pending_count()
+            
+            # If there's a large backlog, prioritize pending messages
+            # Use batch size of 100 for pending messages
+            pending_batch_size = 100
+            
+            # Get pending messages - check ALL messages in the group, not just this consumer
+            # This allows us to claim messages from inactive consumers
             pending = self.redis_client.xpending_range(
                 self.stream_name,
                 self.consumer_group,
                 min="-",
                 max="+",
-                count=100,
-                consumername=self.consumer_name
+                count=pending_batch_size * 2,  # Get more to filter
             )
 
             if not pending:
                 return
+
+            # Log progress when processing large backlog
+            if total_pending > 100:
+                logger.info(f"Processing pending messages: {total_pending} total pending, batch size: {pending_batch_size}")
 
             retry_ids: List[str] = []
             dlq_candidates: Dict[str, int] = {}
@@ -379,9 +448,9 @@ class FastPathConsumer:
                 elif idle_time_ms >= self.pending_retry_idle_ms:
                     retry_ids.append(msg_id_str)
 
-            # Limit retry processing to avoid blocking - process max 10 at a time
+            # Process larger batches when there's a backlog
             if retry_ids:
-                retry_ids = retry_ids[:10]  # Process max 10 pending messages per iteration
+                retry_ids = retry_ids[:pending_batch_size]
 
             # First, move messages that exceeded retry limit to DLQ
             if dlq_candidates:
@@ -412,43 +481,62 @@ class FastPathConsumer:
                     # Ensure duplicates aren't processed later
                     self.batch_manager.remove_message_ids([msg_id_str])
 
-            # Reprocess pending messages that have been idle long enough
+            # First, always try to read pending messages directly assigned to this consumer
+            # This is the most efficient way to process them
+            pending_direct = self._read_pending_messages(count=pending_batch_size)
+            
+            if pending_direct:
+                messages = pending_direct
+                processed_ids = self._process_batch(messages)
+                if processed_ids:
+                    self.batch_manager.remove_message_ids(processed_ids)
+                    logger.info(f"Processed {len(processed_ids)} pending messages (direct read)")
+                    # Remove processed IDs from retry_ids if they were in there
+                    retry_ids = [msg_id for msg_id in retry_ids if msg_id not in processed_ids]
+                else:
+                    logger.warning(f"Failed to process {len(messages)} pending messages (direct read)")
+
+            # Reprocess pending messages that have been idle long enough (from other consumers or missed)
             if retry_ids:
-                try:
-                    claimed_retry = self.redis_client.xclaim(
-                        self.stream_name,
-                        self.consumer_group,
-                        self.consumer_name,
-                        min_idle_time=self.pending_retry_idle_ms,
-                        message_ids=retry_ids
-                    )
-                except Exception as claim_error:
-                    logger.error(f"Failed to claim retry messages: {claim_error}")
-                    claimed_retry = []
+                    try:
+                        claimed_retry = self.redis_client.xclaim(
+                            self.stream_name,
+                            self.consumer_group,
+                            self.consumer_name,
+                            min_idle_time=self.pending_retry_idle_ms,
+                            message_ids=retry_ids[:pending_batch_size]
+                        )
+                    except Exception as claim_error:
+                        logger.error(f"Failed to claim retry messages: {claim_error}")
+                        claimed_retry = []
 
-                if claimed_retry:
-                    messages = []
-                    for msg_id, fields in claimed_retry:
-                        msg_id_str = msg_id.decode('utf-8') if isinstance(msg_id, bytes) else str(msg_id)
-                        event = self._decode_stream_message(msg_id_str, fields)
+                    if claimed_retry:
+                        messages = []
+                        for msg_id, fields in claimed_retry:
+                            msg_id_str = msg_id.decode('utf-8') if isinstance(msg_id, bytes) else str(msg_id)
+                            event = self._decode_stream_message(msg_id_str, fields)
 
-                        if event is None:
-                            # Unparseable event - send to DLQ immediately
-                            self._handle_failed_message(msg_id_str, event, retry_count=self.max_retries)
-                            try:
-                                self.redis_client.xack(self.stream_name, self.consumer_group, msg_id_str)
-                            except Exception as ack_error:
-                                logger.error(f"Failed to ACK malformed message {msg_id_str}: {ack_error}")
-                            self.batch_manager.remove_message_ids([msg_id_str])
-                            continue
+                            if event is None:
+                                # Unparseable event - send to DLQ immediately
+                                self._handle_failed_message(msg_id_str, event, retry_count=self.max_retries)
+                                try:
+                                    self.redis_client.xack(self.stream_name, self.consumer_group, msg_id_str)
+                                except Exception as ack_error:
+                                    logger.error(f"Failed to ACK malformed message {msg_id_str}: {ack_error}")
+                                self.batch_manager.remove_message_ids([msg_id_str])
+                                continue
 
-                        messages.append({'id': msg_id_str, 'event': event})
+                            messages.append({'id': msg_id_str, 'event': event})
 
-                    if messages:
-                        processed_ids = self._process_batch(messages)
-                        if processed_ids:
-                            self.batch_manager.remove_message_ids(processed_ids)
-                            logger.debug(f"Processed {len(processed_ids)} pending messages")
+                        if messages:
+                            processed_ids = self._process_batch(messages)
+                            if processed_ids:
+                                self.batch_manager.remove_message_ids(processed_ids)
+                                logger.debug(f"Processed {len(processed_ids)} pending messages (claimed)")
+                            else:
+                                logger.warning(f"Failed to process {len(messages)} pending messages")
+                    elif retry_ids:
+                        logger.debug(f"Could not claim {len(retry_ids)} pending messages for retry")
 
         except Exception as e:
             logger.error(f"Error processing pending messages: {e}")
@@ -475,8 +563,19 @@ class FastPathConsumer:
             try:
                 iteration += 1
                 
+                # Check pending message count - prioritize if backlog is significant
+                pending_count = self._get_pending_count()
+                
                 # Process pending messages first (retries)
-                self._process_pending_messages()
+                # If there's a large backlog, process multiple batches before reading new messages
+                if pending_count > 100:
+                    # Process multiple batches of pending messages when backlog is large
+                    for _ in range(min(5, pending_count // 50)):
+                        self._process_pending_messages()
+                        if self._get_pending_count() < 50:
+                            break
+                else:
+                    self._process_pending_messages()
 
                 # Adjust batch size based on write latency (backpressure)
                 self._adjust_batch_size()
@@ -487,8 +586,16 @@ class FastPathConsumer:
                     time.sleep(0.1)
                     continue
 
-                # Read new messages
-                messages = self._read_messages()
+                # Only read new messages if pending backlog is manageable
+                # This ensures we catch up on pending messages first
+                if pending_count < 200:
+                    # Read new messages
+                    messages = self._read_messages()
+                else:
+                    # Skip reading new messages when backlog is large
+                    messages = []
+                    if iteration % 10 == 0:  # Log every 10 iterations when skipping
+                        logger.info(f"Prioritizing pending messages: {pending_count} pending, skipping new reads")
 
                 if messages:
                     # Add events to batch with their message IDs
