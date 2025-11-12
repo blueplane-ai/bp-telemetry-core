@@ -11,7 +11,6 @@ Target: <8ms P95 latency for 100 events.
 
 import json
 import zlib
-import asyncio
 import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime
@@ -97,9 +96,10 @@ class SQLiteBatchWriter:
 
     def write_batch_sync(self, events: List[Dict[str, Any]]) -> List[int]:
         """
-        Synchronous batch write (called from thread pool).
+        Synchronous batch write.
 
-        This is the actual implementation that runs in a thread.
+        This is the main write method used by the fast path consumer.
+        All writes are synchronous for simplicity and performance.
 
         Args:
             events: List of event dictionaries
@@ -163,24 +163,10 @@ class SQLiteBatchWriter:
             logger.error(f"Failed to write batch: {e}", exc_info=True)
             raise
 
-    async def write_batch(self, events: List[Dict[str, Any]]) -> List[int]:
-        """
-        Write batch of events to SQLite with compression (async wrapper).
-
-        This is the fast path - zero reads, pure writes.
-        Uses asyncio.to_thread() to run synchronous SQLite operations
-        without blocking the event loop.
-        Target: <8ms P95 for 100 events.
-
-        Args:
-            events: List of event dictionaries
-
-        Returns:
-            List of sequence numbers for written events
-        """
-        # Run synchronous SQLite operations in thread pool
-        result = await asyncio.to_thread(self.write_batch_sync, events)
-        return result
+    # Note: async write_batch() method removed - fast path consumer now uses
+    # synchronous write_batch_sync() directly for simplicity and performance.
+    # If async support is needed in the future (e.g., for slow path workers),
+    # this method can be restored.
 
     def get_by_sequence(self, sequence: int) -> Optional[Dict[str, Any]]:
         """

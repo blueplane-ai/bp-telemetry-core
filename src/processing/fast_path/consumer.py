@@ -483,18 +483,46 @@ class FastPathConsumer:
 
             # First, always try to read pending messages directly assigned to this consumer
             # This is the most efficient way to process them
+            # But we need to check delivery_count to avoid processing messages that exceeded max_retries
             pending_direct = self._read_pending_messages(count=pending_batch_size)
             
             if pending_direct:
-                messages = pending_direct
-                processed_ids = self._process_batch(messages)
-                if processed_ids:
-                    self.batch_manager.remove_message_ids(processed_ids)
-                    logger.info(f"Processed {len(processed_ids)} pending messages (direct read)")
-                    # Remove processed IDs from retry_ids if they were in there
-                    retry_ids = [msg_id for msg_id in retry_ids if msg_id not in processed_ids]
-                else:
-                    logger.warning(f"Failed to process {len(messages)} pending messages (direct read)")
+                # Build a map of message_id -> delivery_count from the pending info we already have
+                # This avoids extra Redis calls
+                pending_map = {str(entry.get('message_id')): entry.get('delivery_count', 0) 
+                              for entry in pending if entry.get('message_id')}
+                
+                # Filter out messages that have exceeded max retries
+                messages_to_process = []
+                dlq_from_direct = []
+                
+                for msg in pending_direct:
+                    delivery_count = pending_map.get(msg['id'], 0)
+                    if delivery_count >= self.max_retries:
+                        # This message exceeded max retries, send to DLQ
+                        dlq_from_direct.append((msg['id'], msg['event'], delivery_count))
+                    else:
+                        messages_to_process.append(msg)
+                
+                # Send messages that exceeded retries to DLQ
+                for msg_id, event, delivery_count in dlq_from_direct:
+                    self._handle_failed_message(msg_id, event, retry_count=delivery_count)
+                    try:
+                        self.redis_client.xack(self.stream_name, self.consumer_group, msg_id)
+                    except Exception as ack_error:
+                        logger.error(f"Failed to ACK DLQ message {msg_id}: {ack_error}")
+                    self.batch_manager.remove_message_ids([msg_id])
+                
+                # Process remaining messages
+                if messages_to_process:
+                    processed_ids = self._process_batch(messages_to_process)
+                    if processed_ids:
+                        self.batch_manager.remove_message_ids(processed_ids)
+                        logger.info(f"Processed {len(processed_ids)} pending messages (direct read)")
+                        # Remove processed IDs from retry_ids if they were in there
+                        retry_ids = [msg_id for msg_id in retry_ids if msg_id not in processed_ids]
+                    else:
+                        logger.warning(f"Failed to process {len(messages_to_process)} pending messages (direct read)")
 
             # Reprocess pending messages that have been idle long enough (from other consumers or missed)
             if retry_ids:
