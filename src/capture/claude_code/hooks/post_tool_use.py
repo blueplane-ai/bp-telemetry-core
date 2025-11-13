@@ -49,6 +49,27 @@ class PostToolUseHook(ClaudeCodeHookBase):
             'success': success,
         }
 
+        # Calculate lines added/removed for Edit tool
+        if tool_name == 'Edit' and success and isinstance(tool_input, dict):
+            old_string = tool_input.get('old_string', '')
+            new_string = tool_input.get('new_string', '')
+
+            # Count lines in old and new strings
+            old_lines = len(old_string.splitlines()) if old_string else 0
+            new_lines = len(new_string.splitlines()) if new_string else 0
+
+            # Calculate net change
+            if new_lines > old_lines:
+                payload['lines_added'] = new_lines - old_lines
+                payload['lines_removed'] = 0
+            elif old_lines > new_lines:
+                payload['lines_added'] = 0
+                payload['lines_removed'] = old_lines - new_lines
+            else:
+                # Same number of lines - consider it a modification
+                payload['lines_added'] = 0
+                payload['lines_removed'] = 0
+
         # Add result size info (not full content for privacy)
         if tool_result is not None:
             if isinstance(tool_result, str):

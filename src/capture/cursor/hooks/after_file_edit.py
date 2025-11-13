@@ -29,13 +29,21 @@ class AfterFileEditHook(CursorHookBase):
     def execute(self) -> int:
         """Execute hook logic."""
         # Extract file edit data from stdin
-        file_path = self.input_data.get('file_path', '')
+        # Note: 'file' is the standard field name, 'file_path' for backwards compat
+        file_path = self.input_data.get('file', self.input_data.get('file_path', ''))
+        changes = self.input_data.get('changes', {})
         edits = self.input_data.get('edits', [])
+
+        # Extract line change statistics
+        lines_added = changes.get('added', 0)
+        lines_removed = changes.get('removed', 0)
 
         # Build event payload
         payload = {
             'file_extension': Path(file_path).suffix if file_path else None,
-            'edit_count': len(edits),
+            'edit_count': len(edits) if edits else 1,
+            'lines_added': lines_added,
+            'lines_removed': lines_removed,
         }
 
         # Build and enqueue event

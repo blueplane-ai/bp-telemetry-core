@@ -39,7 +39,7 @@ class AfterAgentResponseHook(CursorHookBase):
             'response_length': len(text),
             'response_text': text,  # Full response text (privacy-aware)
             'model': model,
-            'tokens': tokens,
+            'tokens_used': tokens,  # Standardized field name
             'duration_ms': duration_ms,
         }
 
