@@ -283,6 +283,47 @@ class SessionPersistence:
         except Exception as e:
             logger.error(f"Failed to mark session timeout for {session_id}: {e}", exc_info=True)
 
+    async def update_workspace_path(self, session_id: str, workspace_path: str) -> None:
+        """
+        Update the workspace path for an existing session.
+
+        Called when workspace path is discovered from JSONL content.
+
+        Args:
+            session_id: Session identifier
+            workspace_path: Discovered workspace path
+        """
+        try:
+            import hashlib
+            workspace_hash = hashlib.sha256(workspace_path.encode()).hexdigest()[:16]
+            workspace_name = _extract_workspace_name(workspace_path)
+
+            with self.sqlite_client.get_connection() as conn:
+                # Update workspace information
+                cursor = conn.execute("""
+                    UPDATE conversations
+                    SET workspace_hash = ?,
+                        workspace_name = ?,
+                        context = json_set(context, '$.workspace_path', ?),
+                        metadata = json_set(metadata, '$.workspace_path', ?)
+                    WHERE session_id = ? AND platform = 'claude_code'
+                """, (
+                    workspace_hash,
+                    workspace_name,
+                    workspace_path,
+                    workspace_path,
+                    session_id
+                ))
+
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    logger.info(f"Updated workspace path in database for session {session_id}")
+                else:
+                    logger.warning(f"Session {session_id} not found in database for workspace update")
+
+        except Exception as e:
+            logger.error(f"Failed to update workspace path for session {session_id}: {e}", exc_info=True)
+
     async def get_session_info(self, session_id: str) -> Optional[dict]:
         """
         Get session information from database.

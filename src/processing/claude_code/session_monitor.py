@@ -236,6 +236,31 @@ class ClaudeCodeSessionMonitor:
         """
         return self.active_sessions.copy()
 
+    async def update_session_workspace(self, session_id: str, workspace_path: str) -> None:
+        """
+        Update the workspace path for a session.
+
+        Called when workspace path is discovered from JSONL content.
+
+        Args:
+            session_id: Session identifier
+            workspace_path: Discovered workspace path
+        """
+        if session_id in self.active_sessions:
+            self.active_sessions[session_id]["workspace_path"] = workspace_path
+            self.active_sessions[session_id]["workspace_hash"] = self._hash_workspace(workspace_path)
+
+            # Update in database if persistence is enabled
+            if self.persistence:
+                await self.persistence.update_workspace_path(session_id, workspace_path)
+
+            logger.info(f"Updated workspace path for session {session_id}: {workspace_path}")
+
+    def _hash_workspace(self, workspace_path: str) -> str:
+        """Generate a hash of the workspace path."""
+        import hashlib
+        return hashlib.sha256(workspace_path.encode()).hexdigest()[:16]
+
     async def _recover_active_sessions(self):
         """
         Recover incomplete sessions from database on startup.

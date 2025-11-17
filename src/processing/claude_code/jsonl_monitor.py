@@ -127,9 +127,21 @@ class ClaudeCodeJSONLMonitor:
         """Monitor JSONL files for a specific session."""
         try:
             workspace_path = session_info.get("workspace_path", "")
+
+            # If no workspace_path, try to discover it from existing JSONL files
             if not workspace_path:
-                logger.warning(f"No workspace_path for session {session_id}")
-                return
+                logger.debug(f"No workspace_path for session {session_id}, attempting discovery...")
+                workspace_path = await self._discover_workspace_path(session_id)
+
+                if workspace_path:
+                    # Update session info with discovered workspace_path
+                    session_info["workspace_path"] = workspace_path
+                    if self.session_monitor:
+                        await self.session_monitor.update_session_workspace(session_id, workspace_path)
+                    logger.info(f"Discovered workspace_path for session {session_id}: {workspace_path}")
+                else:
+                    logger.warning(f"Could not discover workspace_path for session {session_id}")
+                    return
 
             # Find project directory
             project_dir = self._find_project_dir(workspace_path)
@@ -181,6 +193,87 @@ class ClaudeCodeJSONLMonitor:
         project_dir_alt = CLAUDE_PROJECTS_BASE / normalized
         if project_dir_alt.exists() and project_dir_alt.is_dir():
             return project_dir_alt
+
+        return None
+
+    async def _discover_workspace_path(self, session_id: str) -> Optional[str]:
+        """
+        Discover workspace path for a session by searching all project directories.
+
+        When workspace_path is not provided in session_start, we scan all project
+        directories to find a matching session file and extract the workspace from its content.
+        """
+        try:
+            # Search all project directories
+            if not CLAUDE_PROJECTS_BASE.exists():
+                return None
+
+            for project_dir in CLAUDE_PROJECTS_BASE.iterdir():
+                if not project_dir.is_dir():
+                    continue
+
+                # Look for session file
+                session_file = project_dir / f"{session_id}.jsonl"
+                if not session_file.exists():
+                    continue
+
+                logger.debug(f"Found session file at {session_file}")
+
+                # Try to extract workspace from project directory name
+                # Directory names like: -Users-bbalaran-Dev-sierra-blueplane-bp-telemetry-core
+                dir_name = project_dir.name
+                if dir_name.startswith("-"):
+                    dir_name = dir_name[1:]  # Remove leading dash
+
+                # Convert dashes back to slashes for path
+                workspace_path = "/" + dir_name.replace("-", "/")
+
+                # Validate by reading first few lines of JSONL to confirm
+                try:
+                    with open(session_file, 'r', encoding='utf-8') as f:
+                        for i, line in enumerate(f):
+                            if i > 10:  # Check first 10 lines max
+                                break
+                            line = line.strip()
+                            if not line:
+                                continue
+
+                            try:
+                                entry = json.loads(line)
+
+                                # Look for IDE file references or other workspace indicators
+                                content_str = json.dumps(entry)
+                                if workspace_path in content_str:
+                                    logger.debug(f"Confirmed workspace path {workspace_path} in JSONL content")
+                                    return workspace_path
+
+                                # Also check for explicit workspace fields
+                                for key in ('cwd', 'workspace', 'workspace_path'):
+                                    val = entry.get(key)
+                                    if isinstance(val, str) and val:
+                                        return val
+
+                                # Check in metadata
+                                metadata = entry.get('metadata', {})
+                                if isinstance(metadata, dict):
+                                    for key in ('cwd', 'workspace', 'workspace_path'):
+                                        val = metadata.get(key)
+                                        if isinstance(val, str) and val:
+                                            return val
+
+                            except json.JSONDecodeError:
+                                continue
+
+                except Exception as e:
+                    logger.debug(f"Error reading session file {session_file}: {e}")
+                    continue
+
+                # If we found the file but couldn't confirm, still return the derived path
+                logger.info(f"Using derived workspace path {workspace_path} for session {session_id}")
+                return workspace_path
+
+        except Exception as e:
+            logger.error(f"Error discovering workspace path for session {session_id}: {e}")
 
         return None
 
