@@ -99,6 +99,7 @@ class Config:
         self.config_dir = Path(config_dir)
         self._redis_config: Optional[Dict[str, Any]] = None
         self._privacy_config: Optional[Dict[str, Any]] = None
+        self._cursor_config: Optional[Dict[str, Any]] = None
 
         # Load configurations
         self._load_configs()
@@ -120,6 +121,14 @@ class Config:
                 self._privacy_config = yaml.safe_load(f)
         else:
             self._privacy_config = {}
+
+        # Load Cursor config
+        cursor_file = self.config_dir / "cursor.yaml"
+        if cursor_file.exists():
+            with open(cursor_file, 'r') as f:
+                self._cursor_config = yaml.safe_load(f)
+        else:
+            self._cursor_config = {}
 
     @property
     def redis(self) -> RedisConfig:
@@ -173,6 +182,54 @@ class Config:
             opt_out=privacy_data.get("opt_out", []),
         )
 
+    def get_cursor_config(self, section: str) -> Dict[str, Any]:
+        """
+        Get Cursor-specific configuration.
+
+        Args:
+            section: Configuration section (e.g., 'database_monitor', 'markdown_monitor')
+
+        Returns:
+            Dictionary of configuration values with defaults
+        """
+        cursor_data = self._cursor_config.get("cursor", {})
+        section_data = cursor_data.get(section, {})
+        
+        # Provide defaults for common sections
+        if section == "markdown_monitor":
+            return {
+                "enabled": section_data.get("enabled", True),
+                "output_dir": section_data.get("output_dir"),
+                "poll_interval_seconds": section_data.get("poll_interval_seconds", 120),
+                "debounce_delay_seconds": section_data.get("debounce_delay_seconds", 10),
+                "query_timeout_seconds": section_data.get("query_timeout_seconds", 1.5),
+                "trace_keys": section_data.get("trace_keys", [
+                    'aiService.generations',
+                    'aiService.prompts',
+                    'composer.composerData',
+                    'workbench.backgroundComposer.workspacePersistentData',
+                    'workbench.agentMode.exitInfo',
+                    'interactive.sessions',
+                    'history.entries',
+                    'cursorAuth/workspaceOpenedDate',
+                ]),
+            }
+        elif section == "database_monitor":
+            return {
+                "enabled": section_data.get("enabled", True),
+                "poll_interval_seconds": section_data.get("poll_interval_seconds", 30),
+                "sync_window_hours": section_data.get("sync_window_hours", 24),
+                "query_timeout_seconds": section_data.get("query_timeout_seconds", 1.5),
+                "max_retries": section_data.get("max_retries", 3),
+            }
+        elif section == "duckdb_sink":
+            return {
+                "enabled": section_data.get("enabled", False),
+                "database_path": section_data.get("database_path"),
+            }
+        else:
+            return section_data
+
     def get(self, key: str, default: Any = None) -> Any:
         """
         Get arbitrary configuration value.
@@ -191,6 +248,8 @@ class Config:
             config = self._redis_config
         elif parts[0] == "privacy":
             config = self._privacy_config
+        elif parts[0] == "cursor":
+            config = self._cursor_config
         else:
             return default
 

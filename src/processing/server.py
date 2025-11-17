@@ -135,8 +135,9 @@ class TelemetryServer:
 
     def _initialize_cursor_monitor(self) -> None:
         """Initialize Cursor database monitor."""
-        # Check if cursor monitoring is enabled (default: True)
-        enabled = True  # TODO: Load from config
+        # Load cursor config
+        cursor_config = self.config.get_cursor_config("database_monitor")
+        enabled = cursor_config.get("enabled", True)
 
         if not enabled:
             logger.info("Cursor database monitoring is disabled")
@@ -151,18 +152,19 @@ class TelemetryServer:
         self.cursor_monitor = CursorDatabaseMonitor(
             redis_client=self.redis_client,
             session_monitor=self.session_monitor,
-            poll_interval=30.0,
-            sync_window_hours=24,
-            query_timeout=1.5,
-            max_retries=3,
+            poll_interval=cursor_config.get("poll_interval_seconds", 30.0),
+            sync_window_hours=cursor_config.get("sync_window_hours", 24),
+            query_timeout=cursor_config.get("query_timeout_seconds", 1.5),
+            max_retries=cursor_config.get("max_retries", 3),
         )
 
         logger.info("Cursor database monitor initialized")
 
     def _initialize_markdown_monitor(self) -> None:
         """Initialize Cursor Markdown History monitor."""
-        # Check if markdown monitoring is enabled (default: True)
-        enabled = True  # TODO: Load from config
+        # Load cursor config
+        markdown_config = self.config.get_cursor_config("markdown_monitor")
+        enabled = markdown_config.get("enabled", True)
 
         if not enabled:
             logger.info("Cursor Markdown History monitoring is disabled")
@@ -175,20 +177,26 @@ class TelemetryServer:
 
         logger.info("Initializing Cursor Markdown History monitor")
 
-        # Create markdown monitor
-        # Use 2s debounce for dev/testing, 10s for normal operation
-        # TODO: Load from config
-        debounce_delay = 10.0  # Normal operation default
+        # Get output directory from config
+        output_dir = markdown_config.get("output_dir")
+        if output_dir:
+            output_dir = Path(output_dir)
         
+        # Create markdown monitor
         self.markdown_monitor = CursorMarkdownMonitor(
             session_monitor=self.session_monitor,
-            output_dir=None,  # Use default: workspace/.history/
-            poll_interval=120.0,  # 2-minute polling fallback
-            debounce_delay=debounce_delay,
-            query_timeout=1.5,
+            output_dir=output_dir,
+            poll_interval=markdown_config.get("poll_interval_seconds", 120.0),
+            debounce_delay=markdown_config.get("debounce_delay_seconds", 10.0),
+            query_timeout=markdown_config.get("query_timeout_seconds", 1.5),
         )
 
-        logger.info("Cursor Markdown History monitor initialized")
+        logger.info(
+            f"Cursor Markdown History monitor initialized "
+            f"(output_dir={output_dir or 'workspace/.history/'}, "
+            f"poll_interval={markdown_config.get('poll_interval_seconds', 120)}s, "
+            f"debounce={markdown_config.get('debounce_delay_seconds', 10)}s)"
+        )
 
     def _initialize_claude_code_monitor(self) -> None:
         """Initialize Claude Code transcript monitor."""

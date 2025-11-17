@@ -131,6 +131,12 @@ class CursorMarkdownMonitor:
         try:
             # Find database path
             workspace_path = session_info.get("workspace_path")
+            session_id = session_info.get("session_id")
+            
+            logger.debug(
+                f"Checking workspace {workspace_hash} (session: {session_id}, path: {workspace_path})"
+            )
+            
             db_path = await self.workspace_mapper.find_database(
                 workspace_hash,
                 workspace_path
@@ -140,11 +146,18 @@ class CursorMarkdownMonitor:
                 logger.debug(f"No database found for workspace {workspace_hash}")
                 return
             
+            logger.debug(f"Found database for workspace {workspace_hash}: {db_path}")
+            
             # Ensure connection exists
             if workspace_hash not in self.db_connections:
                 success = await self._open_database(workspace_hash, db_path)
                 if not success:
                     return
+
+                logger.info(
+                    f"Workspace mapping: hash={workspace_hash}, session={session_id}, "
+                    f"path={workspace_path}, db={db_path}"
+                )
             
             # Read current data
             current_data = await self._read_workspace_data(workspace_hash, db_path)
@@ -161,7 +174,7 @@ class CursorMarkdownMonitor:
             
             if current_hash != last_hash:
                 logger.info(
-                    f"Detected change in workspace {workspace_hash}, "
+                    f"Detected change in workspace {workspace_hash} (session: {session_id}), "
                     f"scheduling write after {self.debounce_delay}s debounce"
                 )
                 
