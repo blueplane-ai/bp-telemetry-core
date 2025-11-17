@@ -76,6 +76,7 @@ def create_conversations_table(client: SQLiteClient) -> None:
         external_session_id TEXT NOT NULL,
         platform TEXT NOT NULL,
         workspace_hash TEXT,
+        workspace_name TEXT,
         started_at TIMESTAMP NOT NULL,
         ended_at TIMESTAMP,
 
@@ -95,6 +96,16 @@ def create_conversations_table(client: SQLiteClient) -> None:
     );
     """
     client.execute(sql)
+    
+    # Add workspace_name column to existing tables (migration)
+    try:
+        client.execute("ALTER TABLE conversations ADD COLUMN workspace_name TEXT")
+        logger.info("Added workspace_name column to conversations table")
+    except Exception as e:
+        # Column already exists or table doesn't exist yet - that's fine
+        if "duplicate column name" not in str(e).lower():
+            logger.debug(f"Could not add workspace_name column (may already exist): {e}")
+    
     logger.info("Created conversations table")
 
 

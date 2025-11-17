@@ -12,12 +12,46 @@ and recovery capabilities for Claude Code session management.
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, Optional, List
 import uuid
 
 from ..database.sqlite_client import SQLiteClient
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_workspace_name(workspace_path: str) -> str:
+    """
+    Extract human-readable workspace name from full path.
+    
+    Examples:
+        /Users/user/projects/my-app -> my-app
+        /home/user/dev/workspace -> workspace
+        C:\\Users\\user\\projects\\my-app -> my-app
+    
+    Args:
+        workspace_path: Full workspace path
+        
+    Returns:
+        Workspace name (directory name) or empty string if path is invalid
+    """
+    if not workspace_path:
+        return ""
+    
+    try:
+        # Use Path to handle cross-platform paths
+        path = Path(workspace_path)
+        # Get the last component (directory name)
+        name = path.name
+        # If it's empty (e.g., root path), try parent
+        if not name and path.parent != path:
+            name = path.parent.name
+        return name or ""
+    except Exception:
+        # Fallback: try to extract manually
+        parts = workspace_path.replace('\\', '/').rstrip('/').split('/')
+        return parts[-1] if parts else ""
 
 
 class SessionPersistence:
@@ -59,15 +93,22 @@ class SessionPersistence:
             conversation_id = str(uuid.uuid4())
             external_session_id = session_id
             
+            # Extract human-readable workspace name
+            workspace_name = _extract_workspace_name(workspace_path)
+            
             # Prepare context and metadata JSON
             context = {
                 'workspace_path': workspace_path,
                 'workspace_hash': workspace_hash,
+                'workspace_name': workspace_name,
             }
             
             session_metadata = {
                 'source': metadata.get('source', 'hooks'),
                 'started_via': 'session_start_hook',
+                'workspace_name': workspace_name,
+                'workspace_path': workspace_path,
+                'workspace_hash': workspace_hash,
                 **metadata
             }
             
@@ -76,16 +117,17 @@ class SessionPersistence:
                 cursor = conn.execute("""
                     INSERT OR REPLACE INTO conversations (
                         id, session_id, external_session_id, platform,
-                        workspace_hash, started_at,
+                        workspace_hash, workspace_name, started_at,
                         context, metadata,
                         interaction_count, total_tokens, total_changes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     conversation_id,
                     session_id,
                     external_session_id,
                     'claude_code',
                     workspace_hash,
+                    workspace_name,
                     datetime.now(timezone.utc).isoformat(),
                     json.dumps(context),
                     json.dumps(session_metadata),
@@ -174,7 +216,7 @@ class SessionPersistence:
             with self.sqlite_client.get_connection() as conn:
                 cursor = conn.execute("""
                     SELECT
-                        session_id, workspace_hash, context, metadata, started_at
+                        session_id, workspace_hash, workspace_name, context, metadata, started_at
                     FROM conversations
                     WHERE platform = 'claude_code' AND ended_at IS NULL
                     ORDER BY started_at DESC
@@ -186,9 +228,10 @@ class SessionPersistence:
                 for row in rows:
                     session_id = row[0]
                     workspace_hash = row[1]
-                    context_str = row[2] or '{}'
-                    metadata_str = row[3] or '{}'
-                    started_at = row[4]
+                    workspace_name = row[2] or ''
+                    context_str = row[3] or '{}'
+                    metadata_str = row[4] or '{}'
+                    started_at = row[5]
                     
                     try:
                         context = json.loads(context_str) if context_str else {}
@@ -198,9 +241,14 @@ class SessionPersistence:
                         context = {}
                         metadata = {}
                     
+                    # Use workspace_name from database or fallback to context/metadata
+                    if not workspace_name:
+                        workspace_name = context.get('workspace_name') or metadata.get('workspace_name') or ''
+                    
                     recovered[session_id] = {
                         "session_id": session_id,
                         "workspace_hash": workspace_hash,
+                        "workspace_name": workspace_name,
                         "workspace_path": context.get('workspace_path', ''),
                         "platform": "claude_code",
                         "started_at": started_at,
@@ -249,7 +297,7 @@ class SessionPersistence:
             with self.sqlite_client.get_connection() as conn:
                 cursor = conn.execute("""
                     SELECT
-                        session_id, workspace_hash, context, metadata,
+                        session_id, workspace_hash, workspace_name, context, metadata,
                         started_at, ended_at,
                         interaction_count, total_tokens, total_changes
                     FROM conversations
@@ -261,21 +309,25 @@ class SessionPersistence:
                     return None
                 
                 try:
-                    context = json.loads(row[2]) if row[2] else {}
-                    metadata = json.loads(row[3]) if row[3] else {}
+                    context = json.loads(row[3]) if row[3] else {}
+                    metadata = json.loads(row[4]) if row[4] else {}
                 except json.JSONDecodeError:
                     context = {}
                     metadata = {}
                 
+                # Use workspace_name from database or fallback to context/metadata
+                workspace_name = row[2] or context.get('workspace_name') or metadata.get('workspace_name') or ''
+                
                 return {
                     'session_id': row[0],
                     'workspace_hash': row[1],
+                    'workspace_name': workspace_name,
                     'workspace_path': context.get('workspace_path', ''),
-                    'started_at': row[4],
-                    'ended_at': row[5],
-                    'interaction_count': row[6],
-                    'total_tokens': row[7],
-                    'total_changes': row[8],
+                    'started_at': row[5],
+                    'ended_at': row[6],
+                    'interaction_count': row[7],
+                    'total_tokens': row[8],
+                    'total_changes': row[9],
                     'metadata': metadata,
                 }
         except Exception as e:
