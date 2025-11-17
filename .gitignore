@@ -30,6 +30,8 @@ dump.rdb
 *.swp
 *.swo
 *~
+.claude/
+.history/
 
 # OS
 .DS_Store
