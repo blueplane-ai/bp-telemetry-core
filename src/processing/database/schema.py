@@ -60,6 +60,15 @@ def create_raw_traces_table(client: SQLiteClient) -> None:
     );
     """
     client.execute(sql)
+    
+    # Add project_name column for legacy databases
+    try:
+        client.execute("ALTER TABLE raw_traces ADD COLUMN project_name TEXT")
+        logger.info("Added project_name column to raw_traces table")
+    except Exception as e:
+        if "duplicate column name" not in str(e).lower():
+            logger.debug(f"Could not add project_name column (may already exist): {e}")
+    
     logger.info("Created raw_traces table")
 
 
@@ -298,6 +307,31 @@ def create_claude_raw_traces_table(client: SQLiteClient) -> None:
     logger.info("Created claude_raw_traces table")
 
 
+def create_claude_jsonl_offsets_table(client: SQLiteClient) -> None:
+    """
+    Create claude_jsonl_offsets table for persisted JSONL file offsets.
+
+    Args:
+        client: SQLiteClient instance
+    """
+    sql = """
+    CREATE TABLE IF NOT EXISTS claude_jsonl_offsets (
+        file_path TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        agent_id TEXT,
+        line_offset INTEGER NOT NULL,
+        last_size INTEGER NOT NULL,
+        last_mtime REAL NOT NULL,
+        last_read_time REAL NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+    client.execute(sql)
+    client.execute("CREATE INDEX IF NOT EXISTS idx_claude_offset_session ON claude_jsonl_offsets(session_id);")
+    client.execute("CREATE INDEX IF NOT EXISTS idx_claude_offset_agent ON claude_jsonl_offsets(agent_id);")
+    logger.info("Created claude_jsonl_offsets table")
+
+
 def create_claude_indexes(client: SQLiteClient) -> None:
     """
     Create indexes for Claude Code raw traces.
@@ -377,6 +411,7 @@ def create_schema(client: SQLiteClient) -> None:
     # Create tables
     create_raw_traces_table(client)
     create_claude_raw_traces_table(client)
+    create_claude_jsonl_offsets_table(client)
     create_conversations_table(client)
     create_conversation_turns_table(client)
     create_code_changes_table(client)

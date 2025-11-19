@@ -195,6 +195,7 @@ class TelemetryServer:
         self.claude_jsonl_monitor = ClaudeCodeJSONLMonitor(
             redis_client=self.redis_client,
             session_monitor=self.claude_session_monitor,
+            sqlite_client=self.sqlite_client,
             poll_interval=30.0,
         )
 

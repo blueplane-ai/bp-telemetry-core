@@ -21,6 +21,8 @@ from typing import Dict, Optional, Set
 import redis
 
 from .session_monitor import ClaudeCodeSessionMonitor
+from .jsonl_offset_store import JSONLOffsetStore
+from ..database.sqlite_client import SQLiteClient
 from ...capture.shared.project_utils import derive_project_name
 
 logger = logging.getLogger(__name__)
@@ -32,12 +34,19 @@ CLAUDE_PROJECTS_BASE = Path.home() / ".claude" / "projects"
 class FileState:
     """Track state of a monitored JSONL file."""
 
-    def __init__(self, file_path: Path):
+    def __init__(
+        self,
+        file_path: Path,
+        line_offset: int = 0,
+        last_size: int = 0,
+        last_mtime: float = 0.0,
+        last_read_time: float = 0.0,
+    ):
         self.file_path = file_path
-        self.line_offset = 0  # Number of lines already processed
-        self.last_size = 0
-        self.last_mtime = 0.0
-        self.last_read_time = 0.0
+        self.line_offset = line_offset  # Number of lines already processed
+        self.last_size = last_size
+        self.last_mtime = last_mtime
+        self.last_read_time = last_read_time
 
     def has_changed(self) -> bool:
         """Check if file has changed since last read."""
@@ -45,6 +54,11 @@ class FileState:
             return False
 
         stat = self.file_path.stat()
+
+        # File truncated or replaced: reset cached offsets so we can reread
+        if stat.st_size < self.last_size or stat.st_mtime < self.last_mtime:
+            self.reset()
+
         return stat.st_size > self.last_size or stat.st_mtime > self.last_mtime
 
     def update_state(self, size: int, mtime: float):
@@ -52,6 +66,13 @@ class FileState:
         self.last_size = size
         self.last_mtime = mtime
         self.last_read_time = time.time()
+
+    def reset(self):
+        """Reset offsets when file is truncated or replaced."""
+        self.line_offset = 0
+        self.last_size = 0
+        self.last_mtime = 0.0
+        self.last_read_time = 0.0
 
 
 class ClaudeCodeJSONLMonitor:
@@ -69,6 +90,7 @@ class ClaudeCodeJSONLMonitor:
         self,
         redis_client: redis.Redis,
         session_monitor: ClaudeCodeSessionMonitor,
+        sqlite_client: SQLiteClient,
         poll_interval: float = 30.0,
     ):
         self.redis_client = redis_client
@@ -83,6 +105,9 @@ class ClaudeCodeJSONLMonitor:
 
         # Track which sessions we're currently monitoring
         self.monitored_sessions: Set[str] = set()
+
+        # Persisted file offsets via SQLite
+        self.offset_store = JSONLOffsetStore(sqlite_client)
 
         self.running = False
 
@@ -277,18 +302,35 @@ class ClaudeCodeJSONLMonitor:
 
         return None
 
+    def _get_file_state(self, file_path: Path) -> FileState:
+        """Load a file state from cache or SQLite."""
+        if file_path in self.file_states:
+            return self.file_states[file_path]
+
+        persisted = self.offset_store.load_state(file_path)
+        if persisted:
+            state = FileState(
+                file_path=file_path,
+                line_offset=int(persisted.get("line_offset", 0)),
+                last_size=int(persisted.get("last_size", 0)),
+                last_mtime=float(persisted.get("last_mtime", 0.0)),
+                last_read_time=float(persisted.get("last_read_time", 0.0)),
+            )
+        else:
+            state = FileState(file_path)
+
+        self.file_states[file_path] = state
+        return state
+
     async def _monitor_file(
         self,
         file_path: Path,
         session_id: str,
-        session_info: dict
+        session_info: dict,
+        agent_id: Optional[str] = None,
     ):
         """Monitor a single JSONL file for changes."""
-        # Get or create file state
-        if file_path not in self.file_states:
-            self.file_states[file_path] = FileState(file_path)
-
-        file_state = self.file_states[file_path]
+        file_state = self._get_file_state(file_path)
 
         # Check if file has changed
         if not file_state.has_changed():
@@ -310,6 +352,15 @@ class ClaudeCodeJSONLMonitor:
             # Update file state
             stat = file_path.stat()
             file_state.update_state(stat.st_size, stat.st_mtime)
+            self.offset_store.upsert_state(
+                file_path=file_path,
+                session_id=session_id,
+                agent_id=agent_id,
+                line_offset=file_state.line_offset,
+                last_size=file_state.last_size,
+                last_mtime=file_state.last_mtime,
+                last_read_time=file_state.last_read_time,
+            )
 
         except Exception as e:
             logger.error(f"Error monitoring file {file_path}: {e}")
@@ -450,7 +501,7 @@ class ClaudeCodeJSONLMonitor:
                 continue
 
             # Monitor the agent file
-            await self._monitor_file(agent_file, session_id, session_info)
+            await self._monitor_file(agent_file, session_id, session_info, agent_id=agent_id)
 
     async def _cleanup_inactive_sessions(self, active_session_ids: Set[str]):
         """Clean up resources for inactive sessions."""
@@ -463,6 +514,12 @@ class ClaudeCodeJSONLMonitor:
             # Remove agent tracking
             if session_id in self.session_agents:
                 del self.session_agents[session_id]
+
+            # Remove persisted offsets for this session
+            try:
+                self.offset_store.delete_for_session(session_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete offsets for session {session_id}: {e}")
 
             logger.info(f"Cleaned up inactive session: {session_id}")
 
