@@ -27,6 +27,7 @@ from .cursor.database_monitor import CursorDatabaseMonitor
 from .claude_code.transcript_monitor import ClaudeCodeTranscriptMonitor
 from .claude_code.session_monitor import ClaudeCodeSessionMonitor
 from .claude_code.jsonl_monitor import ClaudeCodeJSONLMonitor
+from .claude_code.session_timeout import SessionTimeoutManager
 from ..capture.shared.config import Config
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ class TelemetryServer:
         self.claude_code_monitor: Optional[ClaudeCodeTranscriptMonitor] = None
         self.claude_session_monitor: Optional[ClaudeCodeSessionMonitor] = None
         self.claude_jsonl_monitor: Optional[ClaudeCodeJSONLMonitor] = None
+        self.claude_timeout_manager: Optional[SessionTimeoutManager] = None
         self.running = False
         self.monitor_threads: list[threading.Thread] = []
 
@@ -175,14 +177,25 @@ class TelemetryServer:
         stream_config = self.config.get_stream_config("message_queue")
 
         # Create session monitor (tracks active sessions via Redis events)
+        # Pass sqlite_client for database persistence
         self.claude_session_monitor = ClaudeCodeSessionMonitor(
-            redis_client=self.redis_client
+            redis_client=self.redis_client,
+            sqlite_client=self.sqlite_client
+        )
+        
+        # Create timeout manager for abandoned sessions
+        self.claude_timeout_manager = SessionTimeoutManager(
+            session_monitor=self.claude_session_monitor,
+            sqlite_client=self.sqlite_client,
+            timeout_hours=24,
+            cleanup_interval=3600.0
         )
 
         # Create JSONL monitor (watches JSONL files for active sessions)
         self.claude_jsonl_monitor = ClaudeCodeJSONLMonitor(
             redis_client=self.redis_client,
             session_monitor=self.claude_session_monitor,
+            sqlite_client=self.sqlite_client,
             poll_interval=30.0,
         )
 
@@ -246,13 +259,21 @@ class TelemetryServer:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     loop.run_until_complete(self.claude_jsonl_monitor.start())
+                
+                def run_claude_timeout_manager():
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.claude_timeout_manager.start())
 
                 claude_session_thread = threading.Thread(target=run_claude_session_monitor, daemon=True)
                 claude_jsonl_thread = threading.Thread(target=run_claude_jsonl_monitor, daemon=True)
+                claude_timeout_thread = threading.Thread(target=run_claude_timeout_manager, daemon=True)
                 claude_session_thread.start()
                 claude_jsonl_thread.start()
-                self.monitor_threads.extend([claude_session_thread, claude_jsonl_thread])
-                logger.info("Claude Code session and JSONL monitors started")
+                claude_timeout_thread.start()
+                self.monitor_threads.extend([claude_session_thread, claude_jsonl_thread, claude_timeout_thread])
+                logger.info("Claude Code session, JSONL monitors, and timeout manager started")
 
             if self.claude_code_monitor:
                 def run_claude_code_monitor():
@@ -300,6 +321,12 @@ class TelemetryServer:
         self.running = False
 
         # Stop Claude Code monitors
+        if self.claude_timeout_manager:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.claude_timeout_manager.stop())
+
         if self.claude_jsonl_monitor:
             import asyncio
             loop = asyncio.new_event_loop()

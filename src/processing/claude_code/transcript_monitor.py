@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, Set
 import redis
+from ...capture.shared.project_utils import derive_project_name
 
 logger = logging.getLogger(__name__)
 
@@ -234,14 +235,21 @@ class ClaudeCodeTranscriptMonitor:
             logger.info("Processing %d transcript entries for session %s (from %s hook)",
                        len(entries), session_id, hook_type or "unknown")
 
-            # Extract workspace hash from transcript
-            workspace_hash = self._get_workspace_hash_from_transcript(transcript_path, entries)
+            # Extract workspace metadata from transcript
+            workspace_path = self._derive_workspace_path_from_transcript(transcript_path, entries)
+            workspace_hash = self._get_workspace_hash_from_transcript(transcript_path, entries, workspace_path)
             logger.debug("Extracted workspace hash: %s for transcript: %s",
                         workspace_hash, transcript_path)
 
             # Process each entry
             for line_num, entry in enumerate(entries, start=1):
-                await self._process_transcript_entry(session_id, entry, line_num, workspace_hash)
+                await self._process_transcript_entry(
+                    session_id,
+                    entry,
+                    line_num,
+                    workspace_hash,
+                    workspace_path=workspace_path,
+                )
 
         except Exception as e:
             logger.error("Error processing transcript %s: %s", transcript_path, e, exc_info=True)
@@ -251,7 +259,8 @@ class ClaudeCodeTranscriptMonitor:
         session_id: str,
         entry: Dict[str, Any],
         line_num: int,
-        workspace_hash: str = None
+        workspace_hash: str = None,
+        workspace_path: Optional[str] = None,
     ) -> None:
         """
         Process a single transcript entry and send to Redis.
@@ -285,6 +294,7 @@ class ClaudeCodeTranscriptMonitor:
             "external_session_id": session_id,
             "metadata": {
                 "workspace_hash": workspace_hash,
+                "project_name": derive_project_name(workspace_path),
                 "source": "transcript_monitor",
                 "line_number": line_num,
             },
@@ -344,7 +354,12 @@ class ClaudeCodeTranscriptMonitor:
                 e
             )
 
-    def _get_workspace_hash_from_transcript(self, transcript_path: str, transcript_content: list = None) -> str:
+    def _get_workspace_hash_from_transcript(
+        self,
+        transcript_path: str,
+        transcript_content: list = None,
+        workspace_path: Optional[str] = None,
+    ) -> str:
         """
         Extract workspace hash from transcript path and content.
 
@@ -364,38 +379,42 @@ class ClaudeCodeTranscriptMonitor:
         # Claude Code typically stores transcripts in workspace-specific locations
         # e.g., /path/to/workspace/.claude/sessions/session_id/transcript.jsonl
         path_obj = Path(transcript_path)
-
-        # Look for .claude in parent directories - the parent of .claude is the workspace
-        for parent in path_obj.parents:
-            if parent.name == '.claude' and parent.parent:
-                workspace_path = str(parent.parent)
-                return hashlib.sha256(workspace_path.encode()).hexdigest()[:16]
-
-        # Strategy 2: Parse transcript content for workspace/cwd information
-        if transcript_content:
-            # Look in first few entries for workspace information
-            for entry in transcript_content[:5]:  # Check first 5 entries
-                if isinstance(entry, dict):
-                    # Check for cwd or workspace fields
-                    if 'cwd' in entry:
-                        workspace_path = entry['cwd']
-                        return hashlib.sha256(str(workspace_path).encode()).hexdigest()[:16]
-
-                    if 'workspace' in entry:
-                        workspace_path = entry['workspace']
-                        return hashlib.sha256(str(workspace_path).encode()).hexdigest()[:16]
-
-                    # Check metadata
-                    metadata = entry.get('metadata', {})
-                    if isinstance(metadata, dict):
-                        if 'cwd' in metadata:
-                            workspace_path = metadata['cwd']
-                            return hashlib.sha256(str(workspace_path).encode()).hexdigest()[:16]
-                        if 'workspace' in metadata:
-                            workspace_path = metadata['workspace']
-                            return hashlib.sha256(str(workspace_path).encode()).hexdigest()[:16]
+        resolved_path = workspace_path or self._derive_workspace_path_from_transcript(transcript_path, transcript_content)
+        if resolved_path:
+            return hashlib.sha256(resolved_path.encode()).hexdigest()[:16]
 
         # Strategy 3: Fall back to hashing the transcript directory path
         # This at least gives us a consistent hash per workspace
         transcript_dir = str(path_obj.parent.parent)  # Go up from file to session to workspace area
         return hashlib.sha256(transcript_dir.encode()).hexdigest()[:16]
+
+    def _derive_workspace_path_from_transcript(self, transcript_path: str, transcript_content: list = None) -> Optional[str]:
+        """
+        Attempt to determine the original workspace path associated with a transcript.
+        """
+        path_obj = Path(transcript_path)
+
+        # Strategy 1: detect `.claude` directory structure
+        for parent in path_obj.parents:
+            if parent.name == '.claude' and parent.parent:
+                return str(parent.parent)
+
+        # Strategy 2: inspect transcript content for cwd/workspace hints
+        if transcript_content:
+            for entry in transcript_content[:5]:
+                if not isinstance(entry, dict):
+                    continue
+
+                for key in ('cwd', 'workspace', 'workspace_path'):
+                    val = entry.get(key)
+                    if isinstance(val, str):
+                        return val
+
+                metadata = entry.get('metadata', {})
+                if isinstance(metadata, dict):
+                    for key in ('cwd', 'workspace', 'workspace_path'):
+                        val = metadata.get(key)
+                        if isinstance(val, str):
+                            return val
+
+        return None

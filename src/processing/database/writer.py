@@ -26,10 +26,10 @@ COMPRESSION_LEVEL = 6
 INSERT_QUERY = """
 INSERT INTO raw_traces (
     event_id, session_id, event_type, platform, timestamp,
-    workspace_hash, model, tool_name,
+    workspace_hash, project_name, model, tool_name,
     duration_ms, tokens_used, lines_added, lines_removed,
     event_data
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 # Prepared INSERT statement for claude_raw_traces (Claude Code)
@@ -37,7 +37,7 @@ INSERT_CLAUDE_QUERY = """
 INSERT INTO claude_raw_traces (
     event_id, session_id, event_type, platform, timestamp,
     uuid, parent_uuid, request_id, agent_id,
-    workspace_hash, is_sidechain, user_type, cwd, version, git_branch,
+    workspace_hash, project_name, is_sidechain, user_type, cwd, version, git_branch,
     message_role, message_model, message_id, message_type, stop_reason, stop_sequence,
     input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens,
     service_tier, cache_5m_tokens, cache_1h_tokens,
@@ -45,7 +45,18 @@ INSERT INTO claude_raw_traces (
     summary, leaf_uuid,
     duration_ms, tokens_used, tool_calls_count,
     event_data
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (
+    ?, ?, ?, ?, ?,
+    ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?,
+    ?, ?, ?,
+    ?, ?, ?, ?,
+    ?, ?,
+    ?, ?, ?,
+    ?
+)
 """
 
 
@@ -124,6 +135,7 @@ class SQLiteBatchWriter:
             'platform': event.get('platform', ''),
             'timestamp': event.get('timestamp', ''),
             'workspace_hash': metadata.get('workspace_hash'),
+            'project_name': metadata.get('project_name'),
             'model': payload.get('model') or metadata.get('model'),
             'tool_name': payload.get('tool') or payload.get('tool_name') or metadata.get('tool_name'),
             'duration_ms': payload.get('duration_ms') or metadata.get('duration_ms'),
@@ -165,6 +177,7 @@ class SQLiteBatchWriter:
                 fields['platform'],
                 fields['timestamp'],
                 fields['workspace_hash'],
+                fields['project_name'],
                 fields['model'],
                 fields['tool_name'],
                 fields['duration_ms'],
@@ -280,6 +293,7 @@ class SQLiteBatchWriter:
 
             # Context
             'workspace_hash': metadata.get('workspace_hash'),
+            'project_name': metadata.get('project_name') or entry_data.get('projectName'),
             'is_sidechain': entry_data.get('isSidechain', False),
             'user_type': entry_data.get('userType'),
             'cwd': entry_data.get('cwd'),
@@ -345,7 +359,7 @@ class SQLiteBatchWriter:
             # Compress full event
             compressed_data = self._compress_event(event)
 
-            # Build row tuple (38 fields)
+            # Build row tuple (39 fields)
             row = (
                 fields['event_id'],
                 fields['session_id'],
@@ -357,6 +371,7 @@ class SQLiteBatchWriter:
                 fields['request_id'],
                 fields['agent_id'],
                 fields['workspace_hash'],
+                fields['project_name'],
                 fields['is_sidechain'],
                 fields['user_type'],
                 fields['cwd'],

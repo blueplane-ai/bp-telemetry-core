@@ -89,6 +89,7 @@ class SQLiteClient:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA cache_size=-64000")
+            conn.row_factory = sqlite3.Row
             yield conn
         except Exception as e:
             conn.rollback()

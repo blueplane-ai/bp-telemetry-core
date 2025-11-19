@@ -24,6 +24,7 @@ from shared.queue_writer import MessageQueueWriter
 from shared.event_schema import EventType, HookType
 from shared.config import Config
 from shared.privacy import PrivacySanitizer
+from shared.project_utils import derive_project_name
 
 
 class ClaudeCodeHookBase:
@@ -83,15 +84,15 @@ class ClaudeCodeHookBase:
             print(f"Error reading stdin: {e}", file=sys.stderr)
             self.input_data = {}
 
-    def _get_workspace_hash(self) -> Optional[str]:
+    def _get_workspace_hash(self, workspace_path: Optional[str] = None) -> Optional[str]:
         """
         Get workspace hash from current working directory.
 
         Returns:
             Workspace hash computed from workspace path
         """
-        workspace_path = os.getcwd()
-        return hashlib.sha256(workspace_path.encode()).hexdigest()[:16]
+        path = workspace_path or self.input_data.get('cwd') or os.getcwd()
+        return hashlib.sha256(path.encode()).hexdigest()[:16]
 
     def build_event(
         self,
@@ -128,22 +129,39 @@ class ClaudeCodeHookBase:
         except Exception:
             pass  # Use default version
 
+        metadata_dict = dict(metadata) if metadata else {}
+        workspace_path_input = self.input_data.get('cwd') or self.input_data.get('workspace_path')
+
         event = {
             'version': __version__,
             'hook_type': self.hook_type.value,
             'event_type': event_type.value,
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'payload': payload,
-            'metadata': metadata or {},
+            'metadata': metadata_dict,
         }
+
+        if workspace_path_input:
+            event['metadata']['workspace_path'] = workspace_path_input
 
         # Add process ID
         event['metadata']['pid'] = os.getpid()
 
         # Add workspace hash if available
-        workspace_hash = self._get_workspace_hash()
+        workspace_hash = self._get_workspace_hash(workspace_path_input)
         if workspace_hash:
             event['metadata']['workspace_hash'] = workspace_hash
+
+        # Attach project name for downstream analytics
+        project_name = event['metadata'].get('project_name')
+        if not project_name:
+            project_name = derive_project_name(
+                workspace_path_input,
+                fallback_path=os.getcwd(),
+            )
+
+        if project_name:
+            event['metadata']['project_name'] = project_name
 
         return event
 

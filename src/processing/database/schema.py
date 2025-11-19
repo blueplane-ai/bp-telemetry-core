@@ -41,6 +41,7 @@ def create_raw_traces_table(client: SQLiteClient) -> None:
 
         -- Context fields
         workspace_hash TEXT,
+        project_name TEXT,
         model TEXT,
         tool_name TEXT,
 
@@ -59,6 +60,15 @@ def create_raw_traces_table(client: SQLiteClient) -> None:
     );
     """
     client.execute(sql)
+    
+    # Add project_name column for legacy databases
+    try:
+        client.execute("ALTER TABLE raw_traces ADD COLUMN project_name TEXT")
+        logger.info("Added project_name column to raw_traces table")
+    except Exception as e:
+        if "duplicate column name" not in str(e).lower():
+            logger.debug(f"Could not add project_name column (may already exist): {e}")
+    
     logger.info("Created raw_traces table")
 
 
@@ -76,6 +86,7 @@ def create_conversations_table(client: SQLiteClient) -> None:
         external_session_id TEXT NOT NULL,
         platform TEXT NOT NULL,
         workspace_hash TEXT,
+        workspace_name TEXT,
         started_at TIMESTAMP NOT NULL,
         ended_at TIMESTAMP,
 
@@ -95,6 +106,16 @@ def create_conversations_table(client: SQLiteClient) -> None:
     );
     """
     client.execute(sql)
+    
+    # Add workspace_name column to existing tables (migration)
+    try:
+        client.execute("ALTER TABLE conversations ADD COLUMN workspace_name TEXT")
+        logger.info("Added workspace_name column to conversations table")
+    except Exception as e:
+        # Column already exists or table doesn't exist yet - that's fine
+        if "duplicate column name" not in str(e).lower():
+            logger.debug(f"Could not add workspace_name column (may already exist): {e}")
+    
     logger.info("Created conversations table")
 
 
@@ -233,6 +254,7 @@ def create_claude_raw_traces_table(client: SQLiteClient) -> None:
 
         -- Context fields
         workspace_hash TEXT,
+        project_name TEXT,
         is_sidechain BOOLEAN DEFAULT 0,
         user_type TEXT,
         cwd TEXT,
@@ -285,6 +307,31 @@ def create_claude_raw_traces_table(client: SQLiteClient) -> None:
     logger.info("Created claude_raw_traces table")
 
 
+def create_claude_jsonl_offsets_table(client: SQLiteClient) -> None:
+    """
+    Create claude_jsonl_offsets table for persisted JSONL file offsets.
+
+    Args:
+        client: SQLiteClient instance
+    """
+    sql = """
+    CREATE TABLE IF NOT EXISTS claude_jsonl_offsets (
+        file_path TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        agent_id TEXT,
+        line_offset INTEGER NOT NULL,
+        last_size INTEGER NOT NULL,
+        last_mtime REAL NOT NULL,
+        last_read_time REAL NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+    client.execute(sql)
+    client.execute("CREATE INDEX IF NOT EXISTS idx_claude_offset_session ON claude_jsonl_offsets(session_id);")
+    client.execute("CREATE INDEX IF NOT EXISTS idx_claude_offset_agent ON claude_jsonl_offsets(agent_id);")
+    logger.info("Created claude_jsonl_offsets table")
+
+
 def create_claude_indexes(client: SQLiteClient) -> None:
     """
     Create indexes for Claude Code raw traces.
@@ -296,6 +343,7 @@ def create_claude_indexes(client: SQLiteClient) -> None:
         # Primary query patterns
         "CREATE INDEX IF NOT EXISTS idx_claude_session_time ON claude_raw_traces(session_id, timestamp);",
         "CREATE INDEX IF NOT EXISTS idx_claude_event_type_time ON claude_raw_traces(event_type, timestamp);",
+        "CREATE INDEX IF NOT EXISTS idx_claude_project_name ON claude_raw_traces(project_name);",
 
         # UUID lookups for threading
         "CREATE INDEX IF NOT EXISTS idx_claude_uuid ON claude_raw_traces(uuid);",
@@ -334,8 +382,12 @@ def create_indexes(client: SQLiteClient) -> None:
         "CREATE INDEX IF NOT EXISTS idx_event_type_time ON raw_traces(event_type, timestamp);",
         "CREATE INDEX IF NOT EXISTS idx_date_hour ON raw_traces(event_date, event_hour);",
         "CREATE INDEX IF NOT EXISTS idx_timestamp ON raw_traces(timestamp DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_project_name ON raw_traces(project_name);",
         "CREATE INDEX IF NOT EXISTS idx_conv_session ON conversations(session_id);",
         "CREATE INDEX IF NOT EXISTS idx_conv_platform_time ON conversations(platform, started_at DESC);",
+        # Index for Claude Code session recovery (active sessions query)
+        "CREATE INDEX IF NOT EXISTS idx_conv_platform_active ON conversations(platform, ended_at) WHERE ended_at IS NULL;",
+        "CREATE INDEX IF NOT EXISTS idx_conv_platform_started ON conversations(platform, started_at);",
         "CREATE INDEX IF NOT EXISTS idx_turn_conv ON conversation_turns(conversation_id, turn_number);",
         "CREATE INDEX IF NOT EXISTS idx_changes_conv ON code_changes(conversation_id);",
         "CREATE INDEX IF NOT EXISTS idx_changes_accepted ON code_changes(accepted, timestamp);",
@@ -359,6 +411,7 @@ def create_schema(client: SQLiteClient) -> None:
     # Create tables
     create_raw_traces_table(client)
     create_claude_raw_traces_table(client)
+    create_claude_jsonl_offsets_table(client)
     create_conversations_table(client)
     create_conversation_turns_table(client)
     create_code_changes_table(client)

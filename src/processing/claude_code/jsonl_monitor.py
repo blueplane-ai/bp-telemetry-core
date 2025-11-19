@@ -21,6 +21,9 @@ from typing import Dict, Optional, Set
 import redis
 
 from .session_monitor import ClaudeCodeSessionMonitor
+from .jsonl_offset_store import JSONLOffsetStore
+from ..database.sqlite_client import SQLiteClient
+from ...capture.shared.project_utils import derive_project_name, recover_workspace_path_from_slug
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +34,19 @@ CLAUDE_PROJECTS_BASE = Path.home() / ".claude" / "projects"
 class FileState:
     """Track state of a monitored JSONL file."""
 
-    def __init__(self, file_path: Path):
+    def __init__(
+        self,
+        file_path: Path,
+        line_offset: int = 0,
+        last_size: int = 0,
+        last_mtime: float = 0.0,
+        last_read_time: float = 0.0,
+    ):
         self.file_path = file_path
-        self.line_offset = 0  # Number of lines already processed
-        self.last_size = 0
-        self.last_mtime = 0.0
-        self.last_read_time = 0.0
+        self.line_offset = line_offset  # Number of lines already processed
+        self.last_size = last_size
+        self.last_mtime = last_mtime
+        self.last_read_time = last_read_time
 
     def has_changed(self) -> bool:
         """Check if file has changed since last read."""
@@ -44,6 +54,11 @@ class FileState:
             return False
 
         stat = self.file_path.stat()
+
+        # File truncated or replaced: reset cached offsets so we can reread
+        if stat.st_size < self.last_size or stat.st_mtime < self.last_mtime:
+            self.reset()
+
         return stat.st_size > self.last_size or stat.st_mtime > self.last_mtime
 
     def update_state(self, size: int, mtime: float):
@@ -51,6 +66,13 @@ class FileState:
         self.last_size = size
         self.last_mtime = mtime
         self.last_read_time = time.time()
+
+    def reset(self):
+        """Reset offsets when file is truncated or replaced."""
+        self.line_offset = 0
+        self.last_size = 0
+        self.last_mtime = 0.0
+        self.last_read_time = 0.0
 
 
 class ClaudeCodeJSONLMonitor:
@@ -68,6 +90,7 @@ class ClaudeCodeJSONLMonitor:
         self,
         redis_client: redis.Redis,
         session_monitor: ClaudeCodeSessionMonitor,
+        sqlite_client: SQLiteClient,
         poll_interval: float = 30.0,
     ):
         self.redis_client = redis_client
@@ -82,6 +105,9 @@ class ClaudeCodeJSONLMonitor:
 
         # Track which sessions we're currently monitoring
         self.monitored_sessions: Set[str] = set()
+
+        # Persisted file offsets via SQLite
+        self.offset_store = JSONLOffsetStore(sqlite_client)
 
         self.running = False
 
@@ -126,9 +152,21 @@ class ClaudeCodeJSONLMonitor:
         """Monitor JSONL files for a specific session."""
         try:
             workspace_path = session_info.get("workspace_path", "")
+
+            # If no workspace_path, try to discover it from existing JSONL files
             if not workspace_path:
-                logger.warning(f"No workspace_path for session {session_id}")
-                return
+                logger.debug(f"No workspace_path for session {session_id}, attempting discovery...")
+                workspace_path = await self._discover_workspace_path(session_id)
+
+                if workspace_path:
+                    # Update session info with discovered workspace_path
+                    session_info["workspace_path"] = workspace_path
+                    if self.session_monitor:
+                        await self.session_monitor.update_session_workspace(session_id, workspace_path)
+                    logger.info(f"Discovered workspace_path for session {session_id}: {workspace_path}")
+                else:
+                    logger.warning(f"Could not discover workspace_path for session {session_id}")
+                    return
 
             # Find project directory
             project_dir = self._find_project_dir(workspace_path)
@@ -183,18 +221,110 @@ class ClaudeCodeJSONLMonitor:
 
         return None
 
+    async def _discover_workspace_path(self, session_id: str) -> Optional[str]:
+        """
+        Discover workspace path for a session by searching all project directories.
+
+        When workspace_path is not provided in session_start, we scan all project
+        directories to find a matching session file and extract the workspace from its content.
+        """
+        try:
+            # Search all project directories
+            if not CLAUDE_PROJECTS_BASE.exists():
+                return None
+
+            for project_dir in CLAUDE_PROJECTS_BASE.iterdir():
+                if not project_dir.is_dir():
+                    continue
+
+                # Look for session file
+                session_file = project_dir / f"{session_id}.jsonl"
+                if not session_file.exists():
+                    continue
+
+                logger.debug(f"Found session file at {session_file}")
+
+                # Try to recover workspace path from project slug
+                workspace_path = recover_workspace_path_from_slug(project_dir) or ""
+
+                # Validate by reading first few lines of JSONL to confirm
+                try:
+                    with open(session_file, 'r', encoding='utf-8') as f:
+                        for i, line in enumerate(f):
+                            if i > 10:  # Check first 10 lines max
+                                break
+                            line = line.strip()
+                            if not line:
+                                continue
+
+                            try:
+                                entry = json.loads(line)
+
+                                # Look for IDE file references or other workspace indicators
+                                content_str = json.dumps(entry)
+                                if workspace_path in content_str:
+                                    logger.debug(f"Confirmed workspace path {workspace_path} in JSONL content")
+                                    return workspace_path
+
+                                # Also check for explicit workspace fields
+                                for key in ('cwd', 'workspace', 'workspace_path'):
+                                    val = entry.get(key)
+                                    if isinstance(val, str) and val:
+                                        return val
+
+                                # Check in metadata
+                                metadata = entry.get('metadata', {})
+                                if isinstance(metadata, dict):
+                                    for key in ('cwd', 'workspace', 'workspace_path'):
+                                        val = metadata.get(key)
+                                        if isinstance(val, str) and val:
+                                            return val
+
+                            except json.JSONDecodeError:
+                                continue
+
+                except Exception as e:
+                    logger.debug(f"Error reading session file {session_file}: {e}")
+                    continue
+
+                # If we found the file but couldn't confirm, still return the derived path
+                logger.info(f"Using derived workspace path {workspace_path} for session {session_id}")
+                return workspace_path
+
+        except Exception as e:
+            logger.error(f"Error discovering workspace path for session {session_id}: {e}")
+
+        return None
+
+    def _get_file_state(self, file_path: Path) -> FileState:
+        """Load a file state from cache or SQLite."""
+        if file_path in self.file_states:
+            return self.file_states[file_path]
+
+        persisted = self.offset_store.load_state(file_path)
+        if persisted:
+            state = FileState(
+                file_path=file_path,
+                line_offset=int(persisted.get("line_offset", 0)),
+                last_size=int(persisted.get("last_size", 0)),
+                last_mtime=float(persisted.get("last_mtime", 0.0)),
+                last_read_time=float(persisted.get("last_read_time", 0.0)),
+            )
+        else:
+            state = FileState(file_path)
+
+        self.file_states[file_path] = state
+        return state
+
     async def _monitor_file(
         self,
         file_path: Path,
         session_id: str,
-        session_info: dict
+        session_info: dict,
+        agent_id: Optional[str] = None,
     ):
         """Monitor a single JSONL file for changes."""
-        # Get or create file state
-        if file_path not in self.file_states:
-            self.file_states[file_path] = FileState(file_path)
-
-        file_state = self.file_states[file_path]
+        file_state = self._get_file_state(file_path)
 
         # Check if file has changed
         if not file_state.has_changed():
@@ -216,6 +346,15 @@ class ClaudeCodeJSONLMonitor:
             # Update file state
             stat = file_path.stat()
             file_state.update_state(stat.st_size, stat.st_mtime)
+            self.offset_store.upsert_state(
+                file_path=file_path,
+                session_id=session_id,
+                agent_id=agent_id,
+                line_offset=file_state.line_offset,
+                last_size=file_state.last_size,
+                last_mtime=file_state.last_mtime,
+                last_read_time=file_state.last_read_time,
+            )
 
         except Exception as e:
             logger.error(f"Error monitoring file {file_path}: {e}")
@@ -274,6 +413,8 @@ class ClaudeCodeJSONLMonitor:
             await self._detect_new_agents(entry_data, session_id)
 
             # Build event for Redis
+            project_name = session_info.get("project_name") or derive_project_name(session_info.get("workspace_path"))
+
             event = {
                 "version": "0.1.0",
                 "hook_type": "JSONLTrace",
@@ -284,6 +425,7 @@ class ClaudeCodeJSONLMonitor:
                 "external_session_id": session_id,
                 "metadata": {
                     "workspace_hash": session_info.get("workspace_hash"),
+                    "project_name": project_name,
                     "source": "jsonl_monitor",
                 },
                 "payload": {
@@ -353,7 +495,7 @@ class ClaudeCodeJSONLMonitor:
                 continue
 
             # Monitor the agent file
-            await self._monitor_file(agent_file, session_id, session_info)
+            await self._monitor_file(agent_file, session_id, session_info, agent_id=agent_id)
 
     async def _cleanup_inactive_sessions(self, active_session_ids: Set[str]):
         """Clean up resources for inactive sessions."""
@@ -366,6 +508,12 @@ class ClaudeCodeJSONLMonitor:
             # Remove agent tracking
             if session_id in self.session_agents:
                 del self.session_agents[session_id]
+
+            # Remove persisted offsets for this session
+            try:
+                self.offset_store.delete_for_session(session_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete offsets for session {session_id}: {e}")
 
             logger.info(f"Cleaned up inactive session: {session_id}")
 
