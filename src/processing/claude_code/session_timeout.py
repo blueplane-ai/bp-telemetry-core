@@ -117,8 +117,7 @@ class SessionTimeoutManager:
                     )
                     
                     # Remove from memory if present
-                    if session_id in self.session_monitor.active_sessions:
-                        del self.session_monitor.active_sessions[session_id]
+                    if self.session_monitor.remove_session(session_id):
                         logger.debug(f"Removed timed-out session {session_id} from memory")
                         
                 except Exception as e:

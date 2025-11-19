@@ -82,6 +82,7 @@ class ConversationWorker:
                 messages = await self._read_cdc_stream()
                 
                 for msg in messages:
+                    message_id = msg.get('id')
                     event = msg.get('event', {})
                     event_type = event.get('event_type', '')
                     
@@ -89,6 +90,9 @@ class ConversationWorker:
                         session_id = event.get('session_id') or event.get('payload', {}).get('session_id')
                         if session_id:
                             await self._process_completed_session(session_id)
+                    
+                    if message_id:
+                        self._ack_message(message_id)
                 
                 await asyncio.sleep(0.1)  # Small delay between reads
                 
@@ -148,6 +152,17 @@ class ConversationWorker:
         except Exception as e:
             logger.error(f"Error reading CDC stream: {e}")
             return []
+
+    def _ack_message(self, message_id: str) -> None:
+        """Acknowledge a CDC message to prevent reprocessing."""
+        try:
+            self.redis_client.xack(
+                self.cdc_stream_name,
+                self.consumer_group,
+                message_id
+            )
+        except redis.RedisError as e:
+            logger.error(f"Failed to ack CDC message {message_id}: {e}")
 
     async def _process_completed_session(self, session_id: str):
         """
