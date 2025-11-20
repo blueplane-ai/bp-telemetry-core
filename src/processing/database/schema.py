@@ -8,6 +8,7 @@ Database schema definitions and migrations for Blueplane Telemetry Core.
 Creates tables for raw traces, conversations, and related data structures.
 """
 
+import hashlib
 import logging
 from typing import Optional
 
@@ -463,6 +464,8 @@ def create_indexes(client: SQLiteClient) -> None:
         with client.get_connection() as conn:
             cursor = conn.execute("PRAGMA table_info(conversations)")
             columns = [row[1] for row in cursor.fetchall()]
+            conversations_columns = columns.copy()
+            conversations_columns = columns.copy()
             if 'external_session_id' in columns and 'external_id' not in columns:
                 has_new_schema = False
     except Exception:
@@ -725,6 +728,7 @@ def migrate_to_v2(client: SQLiteClient) -> None:
             # Check if migration already done (check for external_id column)
             cursor = conn.execute("PRAGMA table_info(conversations)")
             columns = [row[1] for row in cursor.fetchall()]
+            conversations_columns = columns.copy()
             has_external_id = 'external_id' in columns
             has_external_session_id = 'external_session_id' in columns
             
@@ -781,18 +785,36 @@ def migrate_to_v2(client: SQLiteClient) -> None:
             else:
                 # Use window function to pick earliest session per external_session_id
                 # This handles duplicates by selecting the first occurrence
-                cursor = conn.execute("""
+                has_workspace_hash_col = 'workspace_hash' in conversations_columns
+                has_workspace_name_col = 'workspace_name' in conversations_columns
+                has_ended_at_col = 'ended_at' in conversations_columns
+                has_context_col = 'context' in conversations_columns
+
+                workspace_hash_expr = (
+                    "workspace_hash AS workspace_hash" if has_workspace_hash_col else "NULL AS workspace_hash"
+                )
+                workspace_name_expr = (
+                    "workspace_name AS workspace_name" if has_workspace_name_col else "NULL AS workspace_name"
+                )
+                ended_at_expr = "ended_at AS ended_at" if has_ended_at_col else "NULL AS ended_at"
+                workspace_path_expr = (
+                    "json_extract(context, '$.workspace_path') AS workspace_path"
+                    if has_context_col else "NULL AS workspace_path"
+                )
+                workspace_hash_order = "workspace_hash" if has_workspace_hash_col else "external_session_id"
+
+                ranked_query = f"""
                     WITH ranked_sessions AS (
                         SELECT 
                             external_session_id,
-                            workspace_hash,
-                            workspace_name,
+                            {workspace_hash_expr},
+                            {workspace_name_expr},
                             started_at,
-                            ended_at,
-                            json_extract(context, '$.workspace_path') as workspace_path,
+                            {ended_at_expr},
+                            {workspace_path_expr},
                             ROW_NUMBER() OVER (
                                 PARTITION BY external_session_id 
-                                ORDER BY started_at ASC, workspace_hash ASC
+                                ORDER BY started_at ASC, {workspace_hash_order} ASC
                             ) as rn
                         FROM conversations
                         WHERE platform = 'cursor'
@@ -808,26 +830,44 @@ def migrate_to_v2(client: SQLiteClient) -> None:
                         workspace_path
                     FROM ranked_sessions
                     WHERE rn = 1
-                """)
+                """
+                cursor = conn.execute(ranked_query)
                 
-                session_mapping = {}  # external_session_id -> new internal session_id
+                session_mapping = {}  # external_session_id -> {"internal_id": uuid, "workspace_hash": str}
                 cursor_sessions_data = []
                 
                 for row in cursor.fetchall():
                     external_session_id = row[0]
-                    workspace_hash = row[1] or ''
+                    workspace_hash = (row[1] or '').strip()
                     workspace_name = row[2]
                     started_at = row[3]
                     ended_at = row[4]
-                    workspace_path = row[5] or ''
+                    workspace_path = (row[5] or '').strip()
                     
                     # Validate we have required fields
-                    if not external_session_id or not workspace_hash:
+                    if not external_session_id:
                         logger.warning(
-                            f"Skipping invalid Cursor session: "
-                            f"external_session_id={external_session_id}, workspace_hash={workspace_hash}"
+                            "Skipping Cursor session with missing external_session_id during migration"
                         )
                         continue
+                    
+                    workspace_hash_source = "existing"
+                    original_workspace_hash = workspace_hash
+
+                    if not workspace_hash:
+                        if workspace_path:
+                            workspace_hash = hashlib.sha256(workspace_path.encode()).hexdigest()[:16]
+                            workspace_hash_source = "workspace_path"
+                        else:
+                            # Fall back to hashing the external session ID to ensure determinism
+                            workspace_hash = hashlib.sha256(external_session_id.encode()).hexdigest()[:16]
+                            workspace_hash_source = "external_session_id"
+                        
+                        logger.info(
+                            "Inferred workspace_hash for session %s using %s",
+                            external_session_id,
+                            workspace_hash_source
+                        )
                     
                     # Check for duplicates before inserting
                     if external_session_id in session_mapping:
@@ -839,7 +879,18 @@ def migrate_to_v2(client: SQLiteClient) -> None:
                     
                     # Generate new internal session ID
                     internal_session_id = str(uuid.uuid4())
-                    session_mapping[external_session_id] = internal_session_id
+                    session_mapping[external_session_id] = {
+                        "internal_id": internal_session_id,
+                        "workspace_hash": workspace_hash
+                    }
+                    
+                    metadata = {
+                        'migrated': True,
+                        'migration_date': datetime.now(timezone.utc).isoformat(),
+                        'workspace_hash_source': workspace_hash_source,
+                    }
+                    if original_workspace_hash and original_workspace_hash != workspace_hash:
+                        metadata['original_workspace_hash'] = original_workspace_hash
                     
                     cursor_sessions_data.append((
                         internal_session_id,
@@ -849,10 +900,7 @@ def migrate_to_v2(client: SQLiteClient) -> None:
                         workspace_path,
                         started_at,
                         ended_at,
-                        json.dumps({
-                            'migrated': True,
-                            'migration_date': datetime.now(timezone.utc).isoformat()
-                        })
+                        json.dumps(metadata)
                     ))
                 
                 if cursor_sessions_data:
@@ -918,11 +966,14 @@ def migrate_to_v2(client: SQLiteClient) -> None:
             old_columns = [desc[0] for desc in cursor.description]
             
             migrated_count = 0
+            used_external_ids = set()
             for row in cursor.fetchall():
                 row_dict = dict(zip(old_columns, row))
                 conversation_id = row_dict['id']
                 platform = row_dict['platform']
                 external_session_id = row_dict.get('external_session_id', '')
+                workspace_hash_override = None
+                metadata_value = row_dict.get('metadata', '{}')
                 
                 # Determine session_id and external_id
                 if platform == 'cursor':
@@ -932,11 +983,23 @@ def migrate_to_v2(client: SQLiteClient) -> None:
                         continue
                     
                     # Look up new internal session_id
-                    new_session_id = session_mapping.get(external_session_id)
-                    if not new_session_id:
+                    mapping_entry = session_mapping.get(external_session_id)
+                    if not mapping_entry:
                         logger.warning(f"No session mapping found for Cursor conversation {conversation_id} with external_session_id={external_session_id}, skipping")
                         continue
-                    external_id = external_session_id  # For now, use external_session_id as external_id
+                    new_session_id = mapping_entry["internal_id"]
+                    workspace_hash_override = mapping_entry.get("workspace_hash")
+                    external_id = external_session_id or conversation_id
+
+                    # Preserve original external session ID in metadata for reference
+                    if external_session_id:
+                        try:
+                            metadata_obj = json.loads(metadata_value) if metadata_value else {}
+                        except json.JSONDecodeError:
+                            metadata_obj = {}
+                        if metadata_obj.get('external_session_id') != external_session_id:
+                            metadata_obj['external_session_id'] = external_session_id
+                            metadata_value = json.dumps(metadata_obj)
                 elif platform == 'claude_code':
                     # Claude Code: session_id is NULL, external_id is the session/conversation ID
                     new_session_id = None
@@ -947,6 +1010,16 @@ def migrate_to_v2(client: SQLiteClient) -> None:
                     new_session_id = None
                     external_id = external_session_id or conversation_id
             
+                # Ensure external_id uniqueness per platform
+                desired_external_id = external_id or conversation_id
+                external_id_candidate = desired_external_id
+                suffix = 1
+                while (platform, external_id_candidate) in used_external_ids:
+                    external_id_candidate = f"{desired_external_id}__{suffix}"
+                    suffix += 1
+                external_id = external_id_candidate
+                used_external_ids.add((platform, external_id))
+
                 # Insert into new table
                 try:
                     conn.execute("""
@@ -961,12 +1034,12 @@ def migrate_to_v2(client: SQLiteClient) -> None:
                         new_session_id,
                         external_id,
                         platform,
-                        row_dict.get('workspace_hash'),
+                        row_dict.get('workspace_hash') or workspace_hash_override,
                         row_dict.get('workspace_name'),
                         row_dict.get('started_at'),
                         row_dict.get('ended_at'),
                         row_dict.get('context', '{}'),
-                        row_dict.get('metadata', '{}'),
+                        metadata_value,
                         row_dict.get('tool_sequence', '[]'),
                         row_dict.get('acceptance_decisions', '[]'),
                         row_dict.get('interaction_count', 0),

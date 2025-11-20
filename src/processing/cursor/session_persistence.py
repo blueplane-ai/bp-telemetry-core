@@ -418,7 +418,8 @@ class CursorSessionPersistence:
                         metadata = {}
                     
                     recovered[external_session_id] = {
-                        "session_id": row[0],  # internal session ID
+                        "session_id": external_session_id,
+                        "internal_session_id": row[0],
                         "external_session_id": external_session_id,
                         "workspace_hash": row[2],
                         "workspace_name": row[3] or '',

@@ -5,6 +5,7 @@
 
 """Tests for schema migration v1 -> v2."""
 
+import hashlib
 import pytest
 import tempfile
 import shutil
@@ -54,8 +55,7 @@ def v1_schema_db(temp_db):
             interaction_count INTEGER DEFAULT 0,
             acceptance_rate REAL,
             total_tokens INTEGER DEFAULT 0,
-            total_changes INTEGER DEFAULT 0,
-            UNIQUE(external_session_id, platform)
+            total_changes INTEGER DEFAULT 0
         )
     """)
     
@@ -263,4 +263,103 @@ class TestMigrationV1ToV2:
             """)
             duplicates = cursor.fetchall()
             assert len(duplicates) == 0, f"Found duplicates: {duplicates}"
+
+    def test_migration_derives_workspace_hash_from_context(self, temp_db):
+        """Sessions without workspace_hash but with workspace_path are retained."""
+        client = SQLiteClient(temp_db)
+        client.execute("""
+            CREATE TABLE conversations (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                external_session_id TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                workspace_hash TEXT,
+                workspace_name TEXT,
+                started_at TIMESTAMP NOT NULL,
+                ended_at TIMESTAMP,
+                context TEXT DEFAULT '{}',
+                metadata TEXT DEFAULT '{}',
+                tool_sequence TEXT DEFAULT '[]',
+                acceptance_decisions TEXT DEFAULT '[]',
+                interaction_count INTEGER DEFAULT 0,
+                acceptance_rate REAL,
+                total_tokens INTEGER DEFAULT 0,
+                total_changes INTEGER DEFAULT 0
+            )
+        """)
+        client.execute("""
+            INSERT INTO conversations (
+                id, session_id, external_session_id, platform,
+                workspace_hash, workspace_name, started_at, context
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            'ctx_conv',
+            'sess_ctx',
+            'ext_ctx',
+            'cursor',
+            None,
+            'ctx_workspace',
+            '2025-01-01T00:00:00Z',
+            '{"workspace_path": "/tmp/ctx"}'
+        ))
+
+        migrate_schema(client, 1, SCHEMA_VERSION)
+
+        expected_hash = hashlib.sha256("/tmp/ctx".encode()).hexdigest()[:16]
+        with client.get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT workspace_hash FROM cursor_sessions
+                WHERE external_session_id = 'ext_ctx'
+            """)
+            row = cursor.fetchone()
+            assert row is not None
+            assert row[0] == expected_hash
+
+            cursor = conn.execute("""
+                SELECT workspace_hash FROM conversations
+                WHERE external_id = 'ext_ctx'
+            """)
+            conv_row = cursor.fetchone()
+            assert conv_row is not None
+            assert conv_row[0] == expected_hash
+
+    def test_migration_generates_workspace_hash_when_missing(self, temp_db):
+        """Sessions without any workspace context still migrate with deterministic hash."""
+        client = SQLiteClient(temp_db)
+        client.execute("""
+            CREATE TABLE conversations (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                external_session_id TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                workspace_hash TEXT,
+                workspace_name TEXT,
+                started_at TIMESTAMP NOT NULL
+            )
+        """)
+        client.execute("""
+            INSERT INTO conversations VALUES
+            ('legacy_conv', 'legacy_sess', 'ext_legacy', 'cursor', NULL, 'legacy_workspace', '2025-02-01T00:00:00Z')
+        """)
+
+        migrate_schema(client, 1, SCHEMA_VERSION)
+
+        expected_hash = hashlib.sha256("ext_legacy".encode()).hexdigest()[:16]
+        with client.get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT workspace_hash FROM cursor_sessions
+                WHERE external_session_id = 'ext_legacy'
+            """)
+            row = cursor.fetchone()
+            assert row is not None
+            assert row[0] == expected_hash
+
+            # Conversation should still exist and reference the generated hash
+            cursor = conn.execute("""
+                SELECT workspace_hash FROM conversations
+                WHERE external_id = 'ext_legacy'
+            """)
+            conv_row = cursor.fetchone()
+            assert conv_row is not None
+            assert conv_row[0] == expected_hash
 

@@ -371,7 +371,8 @@ class SessionMonitor:
                 
                 # Add to in-memory dict (fast path)
                 session_info = {
-                    "session_id": internal_session_id or session_id,  # Use internal ID if available
+                    "session_id": session_id,  # External session ID (backwards compatibility)
+                    "internal_session_id": internal_session_id,
                     "external_session_id": session_id,
                     "workspace_hash": workspace_hash,
                     "workspace_path": workspace_path,
@@ -437,12 +438,17 @@ class SessionMonitor:
 
     def get_active_workspaces(self) -> Dict[str, dict]:
         """Get currently active workspaces."""
-        return self.active_sessions.copy()
+        with self._lock:
+            return {
+                workspace_hash: session.copy()
+                for workspace_hash, session in self.active_sessions.items()
+            }
 
     def get_workspace_path(self, workspace_hash: str) -> Optional[str]:
         """Get workspace path for hash."""
-        session = self.active_sessions.get(workspace_hash)
-        return session.get("workspace_path") if session else None
+        with self._lock:
+            session = self.active_sessions.get(workspace_hash)
+            return session.get("workspace_path") if session else None
 
     def remove_session_by_workspace_hash(self, workspace_hash: str) -> bool:
         """
