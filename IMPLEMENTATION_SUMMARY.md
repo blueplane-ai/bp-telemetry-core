@@ -174,20 +174,19 @@ Successfully implemented the complete **Layer 1 Capture** system for the Cursor 
 - Verify setup
 - Idempotent (safe to run multiple times)
 
-✅ **Cursor Installation** (`install_cursor.py`)
-- Copy hooks to .cursor/hooks/telemetry/
-- Copy shared modules
-- Create hooks.json configuration
-- Install config to ~/.blueplane/
+⚠️ **Cursor Installation** (DEPRECATED - hooks removed)
+- **Current**: Extension-based capture only
+- **Legacy**: Previously used hooks (now removed)
+- See main README for current installation instructions
 - Dry-run mode support
 
-✅ **Installation Verification** (`verify_installation.py`)
-- Check Python dependencies
-- Verify Redis connection
-- Check stream configuration
-- Validate hooks installation
-- Test hook execution
-- Comprehensive status report
+⚠️ **Installation Verification** (`verify_installation.py`) - **DEPRECATED**
+- ⚠️ This script is deprecated - it was designed for Cursor hooks which have been removed
+- Verification should now be done manually:
+  - Check extension status in Cursor
+  - Check processing server is running
+  - Monitor Redis connection and streams
+- See docs/TROUBLESHOOTING.md for current verification steps
 
 ### 6. Documentation
 
@@ -300,9 +299,12 @@ redis-cli XLEN telemetry:events
 redis-cli XREAD COUNT 1 STREAMS telemetry:events 0-0
 ```
 
-✅ Installation verification:
+⚠️ Installation verification (DEPRECATED):
 ```bash
-python scripts/verify_installation.py
+# verify_installation.py is deprecated - use manual checks instead:
+# - Check extension status in Cursor
+# - Check processing server: ps aux | grep start_server.py
+# - Monitor Redis: redis-cli PING && redis-cli XLEN telemetry:events
 ```
 
 ### Unit Tests
@@ -353,8 +355,8 @@ python scripts/verify_installation.py
 
 **Scripts (3 files):**
 - scripts/init_redis.py (250 lines)
-- scripts/install_cursor.py (200 lines)
-- scripts/verify_installation.py (230 lines)
+- scripts/install_cursor.py (200 lines) - ⚠️ DEPRECATED (hooks removed)
+- scripts/verify_installation.py (230 lines) - ⚠️ DEPRECATED (hooks removed)
 
 **Documentation (5 files):**
 - README.md (updated)
@@ -396,7 +398,17 @@ python scripts/verify_installation.py
 
 ## Recent Updates
 
-### Global Hooks Refactoring (November 11, 2025)
+### Cursor Hooks Removed (November 20, 2025)
+
+⚠️ **DEPRECATED: Cursor hooks have been removed from the telemetry lifecycle**
+- Cursor now uses extension-based capture only (no hooks)
+- Database monitoring handled by Python processing server
+- Extension captures all IDE events directly
+- See documentation for updated installation instructions
+
+### Global Hooks Refactoring (November 11, 2025) - HISTORICAL
+
+⚠️ **Note: This section is historical. Hooks were later removed (see above).**
 
 ✅ **Refactored to use global `~/.cursor/hooks/` instead of project-level hooks**
 - Hooks installed once at global level (Cursor doesn't support project hooks yet)

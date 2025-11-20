@@ -4,6 +4,11 @@
 # License-Filename: LICENSE
 
 """
+DEPRECATED: This script is deprecated and no longer maintained.
+
+Cursor hooks have been removed from the telemetry lifecycle. Cursor now uses
+extension-based capture only. See README.md for current installation instructions.
+
 Installation script for Cursor telemetry capture.
 
 Installs hooks globally to ~/.cursor/hooks/ for all Cursor workspaces.
@@ -152,8 +157,11 @@ def main():
     print("     python scripts/init_redis.py")
     print("  4. (Optional) Install Cursor extension for database monitoring")
     print("\n💡 Verify installation:")
-    print("     python scripts/verify_installation.py")
-    print("\n📝 Note: Global hooks will fire for ALL Cursor workspaces")
+    print("     # verify_installation.py is deprecated - use manual checks:")
+    print("     # - Check extension status in Cursor")
+    print("     # - Check processing server: ps aux | grep start_server.py")
+    print("     # - Monitor Redis: redis-cli PING && redis-cli XLEN telemetry:events")
+    print("\n📝 Note: This script is DEPRECATED - hooks have been removed")
 
     return 0
 

@@ -4,6 +4,18 @@
 # License-Filename: LICENSE
 
 """
+DEPRECATED: This script is deprecated and no longer maintained.
+
+This script was designed to verify Cursor hooks installation, which has been
+removed from the telemetry lifecycle. Cursor now uses extension-based capture
+only, and verification should be done manually by checking:
+- Extension is installed and active in Cursor
+- Processing server is running
+- Redis is accessible
+- Database monitor is functioning
+
+For troubleshooting, see docs/TROUBLESHOOTING.md
+
 Verification script for Blueplane Telemetry installation.
 
 Checks that all components are installed and configured correctly.

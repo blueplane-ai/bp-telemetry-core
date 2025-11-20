@@ -18,12 +18,11 @@ Layer 1: Capture
 │
 └── Platform Implementations
     ├── Cursor
-    │   ├── 9 Hook Scripts (Python)
-    │   ├── VSCode Extension (TypeScript)
-    │   └── Database Monitor
+    │   ├── VSCode Extension (TypeScript) - Event capture
+    │   └── Database Monitor (Python processing server)
     │
-    └── Claude Code (future)
-        └── Hook Scripts
+    └── Claude Code
+        └── Hook Scripts (Python)
 ```
 
 ## Components
@@ -58,27 +57,6 @@ Core utilities used by all platforms:
 
 Cursor platform implementation:
 
-#### Hooks (`cursor/hooks/`)
-
-9 Python scripts that capture events:
-
-1. **`before_submit_prompt.py`** - Before user prompt submission
-2. **`after_agent_response.py`** - After AI response
-3. **`before_mcp_execution.py`** - Before MCP tool execution
-4. **`after_mcp_execution.py`** - After MCP tool execution
-5. **`after_file_edit.py`** - After file modification
-6. **`before_shell_execution.py`** - Before shell command
-7. **`after_shell_execution.py`** - After shell command
-8. **`before_read_file.py`** - Before file read
-9. **`stop.py`** - Session termination
-
-Each hook:
-- Reads `CURSOR_SESSION_ID` from environment
-- Parses command-line arguments
-- Builds event dictionary
-- Sends to Redis Streams via `MessageQueueWriter`
-- Always exits with code 0 (never fails)
-
 #### Extension (`cursor/extension/`)
 
 TypeScript VSCode extension for Cursor:
@@ -90,10 +68,10 @@ TypeScript VSCode extension for Cursor:
 
 Features:
 - Generates unique session IDs (`curs_{timestamp}_{random}`)
-- Sets environment variables for hooks
+- Captures telemetry events directly from the IDE
 - Monitors Cursor's `state.vscdb` database
 - Dual monitoring: file watcher + polling (30s)
-- Sends database traces to message queue
+- Sends events and database traces to message queue
 
 ## Installation
 
@@ -105,6 +83,8 @@ Features:
 
 ### Quick Start
 
+#### For Cursor:
+
 ```bash
 # 1. Install Python dependencies
 pip install -r requirements.txt
@@ -115,16 +95,44 @@ redis-server
 # 3. Initialize Redis streams
 python scripts/init_redis.py
 
-# 4. Install to Cursor workspace
-python scripts/install_cursor.py --workspace /path/to/your/project
+# 4. Install Cursor extension
+cd src/capture/cursor/extension
+npm install
+npm run compile
+# Then install the VSIX in Cursor via Extensions panel
 
-# 5. Verify installation
-python scripts/verify_installation.py --workspace /path/to/your/project
+# 5. Start the processing server
+python scripts/start_server.py
+```
+
+#### For Claude Code:
+
+```bash
+# 1. Install Python dependencies
+pip install -r requirements.txt
+
+# 2. Start Redis
+redis-server
+
+# 3. Initialize Redis streams
+python scripts/init_redis.py
+
+# 4. Install Claude Code hooks
+python scripts/install_claude_code.py
+
+# 5. Start the processing server
+python scripts/start_server.py
+
+# 6. Verify installation
+# - Check extension is active in Cursor (if using Cursor)
+# - Check processing server logs
+# - Monitor Redis: redis-cli XLEN telemetry:events
 ```
 
 ### Manual Installation
 
-See [Cursor README](cursor/README.md) for detailed installation instructions.
+- For Cursor: See [Cursor README](cursor/README.md)
+- For Claude Code: See [Claude Code README](claude_code/README.md)
 
 ## Configuration
 
@@ -168,11 +176,10 @@ privacy:
 ```
 IDE Action (e.g., User submits prompt)
     ↓
-Cursor Hook Triggered
+Cursor Extension Captures Event / Claude Code Hook Triggered
     ↓
-Hook Script Executes
-    ├─ Read CURSOR_SESSION_ID from env
-    ├─ Parse command-line arguments
+Event Builder Executes
+    ├─ Read session_id
     ├─ Build event dictionary
     └─ Call MessageQueueWriter.enqueue()
         ↓
@@ -216,73 +223,36 @@ pip install pytest pytest-asyncio
 pytest src/capture/tests/
 ```
 
-### Adding a New Hook
+### Adding a New Hook (Claude Code)
 
-1. Create hook script in `cursor/hooks/`
-2. Extend `CursorHookBase` class
-3. Implement `execute()` method
-4. Add to `hooks.json`
-5. Make executable: `chmod +x your_hook.py`
+See [Claude Code README](claude_code/README.md) for details on adding hooks for Claude Code.
 
-Example:
-
-```python
-#!/usr/bin/env python3
-from hook_base import CursorHookBase
-from shared.event_schema import HookType, EventType
-
-class MyNewHook(CursorHookBase):
-    def __init__(self):
-        super().__init__(HookType.MY_NEW_HOOK)
-
-    def execute(self) -> int:
-        args = self.parse_args({
-            'my_arg': {'type': str, 'help': 'Description'},
-        })
-
-        event = self.build_event(
-            event_type=EventType.MY_EVENT,
-            payload={'my_arg': args.my_arg}
-        )
-
-        self.enqueue_event(event)
-        return 0
-
-def main():
-    hook = MyNewHook()
-    sys.exit(hook.run())
-
-if __name__ == '__main__':
-    main()
-```
-
-### Testing Individual Hooks
+### Testing Extension Events (Cursor)
 
 ```bash
-# Set environment variables
-export CURSOR_SESSION_ID=test-session-123
-export CURSOR_WORKSPACE_HASH=abc123
-
-# Run hook
-python cursor/hooks/after_file_edit.py \
-  --file-extension py \
-  --lines-added 10 \
-  --lines-removed 2 \
-  --operation edit
-
-# Check Redis queue
+# Check Redis queue for events from Cursor extension
 redis-cli XLEN telemetry:events
 redis-cli XREAD COUNT 1 STREAMS telemetry:events 0-0
+
+# View extension logs in Cursor
+# View > Output > Select "Blueplane Telemetry"
 ```
 
 ## Troubleshooting
 
-### Hooks not executing
+### Events not capturing (Cursor)
 
-1. Check hooks are in `.cursor/hooks/telemetry/`
-2. Verify `hooks.json` exists in `.cursor/`
-3. Ensure hooks are executable: `chmod +x cursor/hooks/*.py`
-4. Check environment variables are set
+1. Check extension is installed and activated in Cursor
+2. View extension logs: Cursor > View > Output > Blueplane Telemetry
+3. Verify Redis connection in extension settings
+4. Check processing server is running
+
+### Events not capturing (Claude Code)
+
+1. Check hooks are in `~/.claude/hooks/telemetry/`
+2. Verify `settings.json` has hook registrations
+3. Ensure hooks are executable: `chmod +x ~/.claude/hooks/telemetry/*.py`
+4. Check Redis is running and accessible
 
 ### Events not reaching Redis
 
@@ -307,13 +277,13 @@ redis-cli XREAD COUNT 1 STREAMS telemetry:events 0-0
 
 | Metric | Target | Actual |
 |--------|--------|--------|
-| Hook execution | <1ms P95 | ~0.5ms |
+| Event capture | <1ms P95 | ~0.5ms |
 | Redis XADD | <1ms P95 | ~0.3ms |
 | Total overhead | <2ms P95 | ~1ms |
 
 ### Optimization
 
-Hooks are optimized for minimal overhead:
+Capture layer is optimized for minimal overhead:
 
 - ✅ Fire-and-forget pattern
 - ✅ No synchronous waits
@@ -326,10 +296,12 @@ Hooks are optimized for minimal overhead:
 
 Layer 1 follows strict privacy guidelines:
 
-- ❌ No code content captured
-- ❌ No file paths (only extensions)
-- ❌ No prompt text
+- ❌ No code content captured (by default)
+- ❌ No file paths in plaintext (hashed)
+- ❌ No prompt text (by default)
 - ✅ Only metadata (timestamps, counts, hashes)
+
+Note: Privacy settings can be configured in `config/privacy.yaml`
 
 See `config/privacy.yaml` for configuration.
 
@@ -346,14 +318,14 @@ For issues or questions:
 
 1. Check [Troubleshooting](#troubleshooting) section
 2. Review architecture docs
-3. Run verification: `python scripts/verify_installation.py`
+3. Check extension status and processing server logs
 4. File an issue on GitHub
 
 ---
 
 **Status**: ✅ Implementation Complete
 - Shared components implemented
-- Cursor hooks implemented (9 scripts)
-- Cursor extension implemented
+- Cursor extension implemented (event capture + database monitoring)
+- Claude Code hooks implemented (7 scripts)
 - Installation scripts ready
 - Documentation complete

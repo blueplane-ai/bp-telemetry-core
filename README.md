@@ -61,26 +61,22 @@ python scripts/init_redis.py
 # 5. Initialize SQLite database
 python scripts/init_database.py
 
-# 6. Install global hooks (installs to ~/.cursor/hooks/ for all workspaces)
-cd src/capture/cursor
-./install_global_hooks.sh
-
-# 7. Install and activate Cursor extension (required for session management)
+# 6. Install and activate Cursor extension (required for session management and telemetry)
 cd extension
 npm install
 npm run compile
 # Then install the VSIX in Cursor via Extensions panel
 
-# Note: The extension handles session management only.
-# Database monitoring is handled by the Python processing server (step 9).
+# Note: The extension handles session management and event capture.
+# Database monitoring is handled by the Python processing server (step 8).
 
-# 8. Configure Cursor for telemetry
+# 7. Configure Cursor for telemetry
 # In Cursor: Open Command Palette (Cmd+Shift+P / Ctrl+Shift+P)
 # Run: "Developer: Set Log Level" → Select "Trace"
 # This enables detailed logging (optional, for debugging)
 
-# 9. Start the processing server (in a separate terminal)
-cd ../../..
+# 8. Start the processing server (in a separate terminal)
+cd ../..
 python scripts/start_server.py
 
 # The processing server includes:
@@ -88,13 +84,10 @@ python scripts/start_server.py
 # - Database monitor (polls Cursor SQLite databases)
 # - Session monitor (tracks active sessions from Redis)
 
-# 10. Verify installation
-python scripts/verify_installation.py
-
-# Note: verify_installation.py checks workspace hooks, but global hooks
-# are installed to ~/.cursor/hooks/. To verify global hooks:
-ls ~/.cursor/hooks/*.py
-ls ~/.cursor/hooks.json
+# 9. Verify installation
+# Check extension is active in Cursor: Extensions → Blueplane Telemetry
+# Check processing server logs for any errors
+# Monitor Redis: redis-cli XLEN telemetry:events
 ```
 
 ### Installation (Claude Code)
@@ -134,7 +127,7 @@ python scripts/start_server.py
 
 ### Verification (Cursor)
 
-After installation, hooks will automatically capture events as you work in Cursor:
+After installation, the extension and database monitor will automatically capture events as you work in Cursor:
 
 ```bash
 # Check Redis queue
@@ -179,8 +172,8 @@ python scripts/test_end_to_end.py
 
 Lightweight telemetry capture that integrates with your IDE:
 
-- **IDE Hooks**: Capture events from Claude Code, Cursor, and other platforms
-- **Session Management**: Cursor extension manages session IDs and sends session events
+- **IDE Hooks**: Capture events from Claude Code and other platforms (Claude Code uses hooks)
+- **Session Management**: Cursor extension manages session IDs and captures telemetry events
 - **Database Monitor**: Python processing server monitors Cursor's SQLite databases (runs in Layer 2)
 - **Message Queue**: Reliable event delivery to Layer 2
 
@@ -248,8 +241,7 @@ Blueplane Telemetry Core is optimized for minimal overhead:
 ### Phase 1: MVP (Current)
 
 - [x] **Layer 1 capture for Cursor** (✅ Complete)
-  - [x] 9 Python hook scripts
-  - [x] TypeScript VSCode extension (session management)
+  - [x] TypeScript VSCode extension (session management and event capture)
   - [x] Database monitoring (Python processing server)
   - [x] Redis Streams message queue
   - [x] Installation scripts
@@ -308,13 +300,10 @@ bp-telemetry-core/
 │   │   │   ├── event_schema.py
 │   │   │   ├── config.py
 │   │   │   └── privacy.py
-│   │   └── cursor/           # Cursor platform
-│   │       ├── hooks/        # 9 hook scripts
-│   │       │   ├── before_submit_prompt.py
-│   │       │   ├── after_agent_response.py
-│   │       │   └── ...
-│   │       ├── install_global_hooks.sh  # Global hooks installer
-│   │       └── extension/    # VSCode extension
+│   │   ├── cursor/           # Cursor platform
+│   │   │   └── extension/    # VSCode extension (handles telemetry)
+│   │   └── claude_code/      # Claude Code platform
+│   │       └── hooks/        # Hook scripts for Claude Code
 │   └── processing/           # Layer 2 implementation ✅
 │       ├── database/         # SQLite client and schema
 │       │   ├── sqlite_client.py
@@ -332,8 +321,7 @@ bp-telemetry-core/
 │   ├── init_redis.py        # Initialize Redis streams
 │   ├── init_database.py     # Initialize SQLite database
 │   ├── start_server.py      # Start processing server
-│   ├── install_cursor.py    # Install workspace hooks (legacy)
-│   ├── verify_installation.py
+│   ├── install_claude_code.py # Install Claude Code hooks
 │   ├── test_end_to_end.py   # End-to-end test
 │   └── test_database_traces.py
 ├── docs/

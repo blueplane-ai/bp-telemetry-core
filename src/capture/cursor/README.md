@@ -1,16 +1,16 @@
 # Cursor Telemetry Capture
 
-Layer 1 telemetry capture system for Cursor IDE using global hooks and VSCode extension.
+Layer 1 telemetry capture system for Cursor IDE using VSCode extension and database monitoring.
 
 ## Architecture
 
-### Global Hooks Approach
+### Extension-Based Approach
 
-Cursor doesn't support project-level hooks yet, so we install hooks globally at `~/.cursor/hooks/`:
+Cursor telemetry is captured through two mechanisms:
 
-- **Global Hooks**: Fire for ALL Cursor workspaces
-- **Extension Events**: Send session start/end events with workspace hash to identify which workspace is active
-- **Workspace-Specific Sessions**: Each workspace gets its own session file with unique session ID
+- **Extension Events**: VSCode extension captures IDE events directly (session management, user actions)
+- **Database Monitoring**: Python processing server monitors Cursor's SQLite database for AI generations and traces
+- **Workspace-Specific Sessions**: Each workspace gets its own session with unique session ID
 
 ### How It Works
 
@@ -22,14 +22,15 @@ Cursor doesn't support project-level hooks yet, so we install hooks globally at 
            │
            ├─ Extension activated
            │  └─> Sends session_start event (workspace_hash, PID)
+           │  └─> Captures IDE events (file edits, commands, etc.)
+           │
+           ├─ User interacts with AI
+           │  └─> Database monitor detects changes in state.vscdb
+           │      └─> Sends AI generation events (prompts, responses, tool usage)
            │
            ├─ User edits file
-           │  └─> Global hook fires (reads workspace session file)
+           │  └─> Extension captures event
            │      └─> Sends file_edit event (session_id, workspace_hash, PID)
-           │
-           ├─ User runs command
-           │  └─> Global hook fires
-           │      └─> Sends shell_execution event
            │
            └─ Extension deactivated
               └─> Sends session_end event
@@ -43,28 +44,28 @@ Cursor doesn't support project-level hooks yet, so we install hooks globally at 
 - Python 3.11+
 - Redis server running (localhost:6379)
 
-### 1. Install Global Hooks
+### 1. Install Extension
 
 ```bash
-cd src/capture/cursor
-./install_global_hooks.sh
-```
-
-This installs hooks to `~/.cursor/hooks/` for all workspaces.
-
-### 2. Install Extension
-
-```bash
-cd extension
+cd src/capture/cursor/extension
 npm install
 npm run compile
-code --install-extension .  # Or install via VSCode Extensions panel
+# Then install via Cursor: Extensions → Install from VSIX
+# Or: code --install-extension <path-to-vsix>
 ```
 
-### 3. Start Redis
+### 2. Start Redis
 
 ```bash
 redis-server
+```
+
+### 3. Start Processing Server
+
+The processing server includes the database monitor that polls Cursor's SQLite database:
+
+```bash
+python scripts/start_server.py
 ```
 
 ### 4. Configure (Optional)
@@ -138,37 +139,41 @@ The extension sends session lifecycle events to Redis:
 **session_end:**
 Same format, but `event_type: "session_end"`.
 
-## Hook Scripts
+## Event Capture
 
-### Available Hooks
+### Extension Events
 
-All hooks installed to `~/.cursor/hooks/`:
+The extension captures:
 
-1. **before_submit_prompt.py** - User prompt submission
-2. **after_agent_response.py** - AI response completion
-3. **before_file_edit.py** - Before file modifications
-4. **after_file_edit.py** - After file modifications
-5. **before_read_file.py** - Before file reads
-6. **before_shell_execution.py** - Before shell commands
-7. **after_shell_execution.py** - After shell commands
-8. **before_mcp_execution.py** - Before MCP tool execution
-9. **after_mcp_execution.py** - After MCP tool execution
+1. **Session lifecycle** - Session start/end with workspace context
+2. **IDE events** - File edits, commands, user actions
+3. **Status updates** - Extension status, errors, diagnostics
 
-### Hook Event Format
+### Database Monitoring Events
+
+The Python processing server monitors Cursor's `state.vscdb` database and captures:
+
+1. **AI prompts** - User prompt submissions to AI
+2. **AI responses** - Assistant responses and generations
+3. **Tool usage** - MCP tool executions, file operations
+4. **Conversation traces** - Full conversation history
+
+### Event Format
 
 ```json
 {
   "version": "0.1.0",
-  "hook_type": "afterFileEdit",
   "event_type": "file_edit",
   "timestamp": "2025-11-11T10:30:00.000Z",
   "payload": {
-    "file_path": "<redacted:path>",
+    "file_extension": "py",
     "operation": "edit"
   },
   "metadata": {
+    "session_id": "curs_1731283200000_abc123",
     "pid": 12345,
-    "workspace_hash": "a1b2c3d4e5f6g7h8"
+    "workspace_hash": "a1b2c3d4e5f6g7h8",
+    "platform": "cursor"
   }
 }
 ```
@@ -177,9 +182,11 @@ All hooks installed to `~/.cursor/hooks/`:
 
 ```
 Extension Start → session_start event → Redis
-     ↓
-Hook Fires → Reads session file → Sends event → Redis
-     ↓
+    ↓
+User Action → Extension captures → Redis
+    ↓
+Database Monitor detects AI activity → Sends traces → Redis
+    ↓
 Extension Stop → session_end event → Redis
 ```
 
@@ -196,13 +203,10 @@ See `config/privacy.yaml` for full privacy settings.
 
 ## Debugging
 
-### Check Hook Installation
+### Check Extension Status
 
-```bash
-ls -la ~/.cursor/hooks/
-```
-
-Should show all 9 hook scripts + `hook_base.py` + `shared/` directory.
+View extension logs in Cursor:
+- `View` → `Output` → Select "Blueplane Telemetry"
 
 ### Check Session File
 
@@ -218,76 +222,88 @@ Should show session info for each workspace.
 redis-cli XREAD COUNT 10 STREAMS telemetry:events 0
 ```
 
-### Extension Logs
+### Check Database Monitor
 
-View in VSCode:
-- `View` → `Output` → Select "Blueplane Telemetry"
+```bash
+# Check if processing server is running with database monitor
+ps aux | grep start_server.py
+
+# View processing server logs
+python scripts/start_server.py  # Should show database monitor activity
+```
 
 ## Multiple Workspaces
 
-The global hooks approach supports multiple Cursor workspaces simultaneously:
+The extension-based approach supports multiple Cursor workspaces simultaneously:
 
 1. Each workspace gets unique session file (workspace hash)
 2. Each workspace has unique session ID
-3. Extension sends session events with workspace hash
-4. Hooks read workspace-specific session file based on current directory
+3. Extension sends session events with workspace hash for each workspace
+4. Database monitor tracks all Cursor instances via PID
 5. All events tagged with workspace_hash and PID
 
 ## Uninstallation
 
 ```bash
-rm -rf ~/.cursor/hooks
+# Uninstall extension from Cursor
+# Extensions → Blueplane Telemetry → Uninstall
+
+# Remove session files
 rm -rf ~/.blueplane/cursor-session
 ```
 
 ## Troubleshooting
 
-**Hooks not firing:**
-- Check hooks are in `~/.cursor/hooks/` and executable
-- Check Redis is running: `redis-cli ping`
-- Check extension is activated in VSCode
+**Extension not capturing events:**
+- Check extension is installed and activated in Cursor
+- View extension logs: Cursor > View > Output > Blueplane Telemetry
+- Verify Redis is running: `redis-cli ping`
+- Check Redis connection in extension settings
+
+**Database monitor not working:**
+- Verify processing server is running: `ps aux | grep start_server.py`
+- Check server logs for database monitor errors
+- Verify Cursor's `state.vscdb` database exists in workspace
+- Ensure database monitor is enabled in configuration
 
 **Wrong session ID:**
-- Check session file for current workspace
+- Check session file for current workspace in `~/.blueplane/cursor-session/`
 - Verify workspace hash matches current directory hash
 - Restart extension to create new session
 
 **Events not appearing in Redis:**
 - Check Redis connection in extension logs
 - Verify config.yaml has correct Redis host/port
-- Check for errors in hook execution (silent failures)
+- Ensure processing server has access to Redis
 
 ## Development
 
-### Testing Hooks
+### Testing Extension
 
-Test individual hooks:
+1. Open extension directory in VSCode:
+   ```bash
+   cd src/capture/cursor/extension
+   code .
+   ```
 
-```bash
-export CURSOR_SESSION_ID=test-session-123
-export CURSOR_WORKSPACE_HASH=abc123def456
+2. Run in debug mode:
+   - Press F5 to launch Extension Development Host
+   - Open a Cursor workspace in the new window
+   - View extension logs in Output panel
 
-cd /path/to/workspace
-~/.cursor/hooks/before_submit_prompt.py \
-  --workspace-root /path/to/workspace \
-  --generation-id gen-456 \
-  --prompt-length 150
-```
+3. Check Redis for events:
+   ```bash
+   redis-cli XLEN telemetry:events
+   redis-cli XREAD COUNT 1 STREAMS telemetry:events 0-0
+   ```
 
-Check Redis queue:
+### Extending the Extension
 
-```bash
-redis-cli XLEN telemetry:events
-redis-cli XREAD COUNT 1 STREAMS telemetry:events 0-0
-```
-
-### Adding New Hooks
-
-1. Create new hook script in `hooks/`
-2. Extend `CursorHookBase` class
-3. Implement `execute()` method
-4. Update `install_global_hooks.sh` to copy new hook
-5. Make executable: `chmod +x hooks/your_hook.py`
+1. Modify TypeScript files in `extension/src/`
+2. Add new event capture logic
+3. Compile: `npm run compile`
+4. Test in Extension Development Host
+5. Package: `npx vsce package`
 
 ## Architecture
 
