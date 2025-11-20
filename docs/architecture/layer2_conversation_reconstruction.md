@@ -443,18 +443,7 @@ CREATE TABLE conversations (
     UNIQUE(external_id, platform)
 );
 
--- Conversation turns table (normalized)
-CREATE TABLE conversation_turns (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id TEXT NOT NULL,
-    turn_index INTEGER NOT NULL,
-    turn_type TEXT NOT NULL,
-    timestamp TIMESTAMP NOT NULL,
-    metadata JSON,
-
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id),
-    INDEX idx_conversation_turns (conversation_id, turn_index)
-);
+-- Note: conversation_turns table not yet implemented
 
 -- Cross-platform alignments
 CREATE TABLE conversation_alignments (

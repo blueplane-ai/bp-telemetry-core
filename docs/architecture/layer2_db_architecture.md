@@ -313,55 +313,6 @@ CREATE INDEX idx_conversations_session_cursor
 CREATE INDEX idx_conversations_external 
     ON conversations(external_id, platform);
 CREATE INDEX idx_conv_platform_time ON conversations(platform, started_at DESC);
-
--- Conversation turns table
-CREATE TABLE IF NOT EXISTS conversation_turns (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL REFERENCES conversations(id),
-    turn_number INTEGER NOT NULL,
-    timestamp TIMESTAMP NOT NULL,
-    turn_type TEXT CHECK (turn_type IN ('user_prompt', 'assistant_response', 'tool_use')),
-
-    content_hash TEXT,
-    metadata TEXT DEFAULT '{}',
-    tokens_used INTEGER,
-    latency_ms INTEGER,
-    tools_called TEXT,
-
-    UNIQUE(conversation_id, turn_number)
-);
-
-CREATE INDEX idx_turn_conv ON conversation_turns(conversation_id, turn_number);
-
--- Code changes table
-CREATE TABLE IF NOT EXISTS code_changes (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL REFERENCES conversations(id),
-    turn_id TEXT REFERENCES conversation_turns(id),
-    timestamp TIMESTAMP NOT NULL,
-
-    file_extension TEXT,
-    operation TEXT CHECK (operation IN ('create', 'edit', 'delete', 'read')),
-    lines_added INTEGER DEFAULT 0,
-    lines_removed INTEGER DEFAULT 0,
-
-    accepted BOOLEAN,
-    acceptance_delay_ms INTEGER,
-    revision_count INTEGER DEFAULT 0
-);
-
-CREATE INDEX idx_changes_conv ON code_changes(conversation_id);
-CREATE INDEX idx_changes_accepted ON code_changes(accepted, timestamp);
-
--- Session mappings table
-CREATE TABLE IF NOT EXISTS session_mappings (
-    external_id TEXT PRIMARY KEY,
-    internal_id TEXT NOT NULL,
-    platform TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    UNIQUE(external_id, platform)
-);
 ```
 
 #### Implementation

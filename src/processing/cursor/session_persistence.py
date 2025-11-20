@@ -210,7 +210,6 @@ class CursorSessionPersistence:
             )
             raise DatabaseError(f"Unexpected error: {e}") from e
 
-    @retry_on_db_error(max_retries=3, delay=0.1)
     async def save_session_end(
         self,
         external_session_id: str,
@@ -244,9 +243,15 @@ class CursorSessionPersistence:
                 """, (external_session_id,))
                 
                 if not cursor.fetchone():
-                    raise SessionNotFoundError(
-                        f"Session {external_session_id} not found in cursor_sessions table"
+                    # Session doesn't exist - likely an old event for a session that was never created
+                    # Log warning and return gracefully (don't retry, retrying won't help)
+                    logger.warning(
+                        f"Session {external_session_id} not found when processing session_end. "
+                        f"This may be an old event for a session that was never created."
                     )
+                    duration = time.time() - start_time
+                    metrics.record_operation('session_end', duration, success=True)  # Mark as success since we handled it
+                    return
                 
                 # Update ended_at timestamp
                 cursor = conn.execute("""

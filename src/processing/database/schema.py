@@ -169,83 +169,6 @@ def create_conversations_table(client: SQLiteClient) -> None:
     logger.info("Created conversations table")
 
 
-def create_conversation_turns_table(client: SQLiteClient) -> None:
-    """
-    Create conversation_turns table for individual conversation turns.
-
-    Args:
-        client: SQLiteClient instance
-    """
-    sql = """
-    CREATE TABLE IF NOT EXISTS conversation_turns (
-        id TEXT PRIMARY KEY,
-        conversation_id TEXT NOT NULL REFERENCES conversations(id),
-        turn_number INTEGER NOT NULL,
-        timestamp TIMESTAMP NOT NULL,
-        turn_type TEXT CHECK (turn_type IN ('user_prompt', 'assistant_response', 'tool_use')),
-
-        content_hash TEXT,
-        metadata TEXT DEFAULT '{}',
-        tokens_used INTEGER,
-        latency_ms INTEGER,
-        tools_called TEXT,
-
-        UNIQUE(conversation_id, turn_number)
-    );
-    """
-    client.execute(sql)
-    logger.info("Created conversation_turns table")
-
-
-def create_code_changes_table(client: SQLiteClient) -> None:
-    """
-    Create code_changes table for tracking file modifications.
-
-    Args:
-        client: SQLiteClient instance
-    """
-    sql = """
-    CREATE TABLE IF NOT EXISTS code_changes (
-        id TEXT PRIMARY KEY,
-        conversation_id TEXT NOT NULL REFERENCES conversations(id),
-        turn_id TEXT REFERENCES conversation_turns(id),
-        timestamp TIMESTAMP NOT NULL,
-
-        file_extension TEXT,
-        operation TEXT CHECK (operation IN ('create', 'edit', 'delete', 'read')),
-        lines_added INTEGER DEFAULT 0,
-        lines_removed INTEGER DEFAULT 0,
-
-        accepted BOOLEAN,
-        acceptance_delay_ms INTEGER,
-        revision_count INTEGER DEFAULT 0
-    );
-    """
-    client.execute(sql)
-    logger.info("Created code_changes table")
-
-
-def create_session_mappings_table(client: SQLiteClient) -> None:
-    """
-    Create session_mappings table for mapping external to internal session IDs.
-
-    Args:
-        client: SQLiteClient instance
-    """
-    sql = """
-    CREATE TABLE IF NOT EXISTS session_mappings (
-        external_id TEXT PRIMARY KEY,
-        internal_id TEXT NOT NULL,
-        platform TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-        UNIQUE(external_id, platform)
-    );
-    """
-    client.execute(sql)
-    logger.info("Created session_mappings table")
-
-
 def create_trace_stats_table(client: SQLiteClient) -> None:
     """
     Create trace_stats table for pre-computed daily aggregations.
@@ -499,11 +422,6 @@ def create_indexes(client: SQLiteClient) -> None:
             "CREATE INDEX IF NOT EXISTS idx_conv_platform_time ON conversations(platform, started_at DESC);",
         ])
     
-    indexes.extend([
-        "CREATE INDEX IF NOT EXISTS idx_turn_conv ON conversation_turns(conversation_id, turn_number);",
-        "CREATE INDEX IF NOT EXISTS idx_changes_conv ON code_changes(conversation_id);",
-        "CREATE INDEX IF NOT EXISTS idx_changes_accepted ON code_changes(accepted, timestamp);",
-    ])
 
     for index_sql in indexes:
         try:
@@ -530,9 +448,6 @@ def create_schema(client: SQLiteClient) -> None:
     create_claude_jsonl_offsets_table(client)
     create_cursor_sessions_table(client)
     create_conversations_table(client)
-    create_conversation_turns_table(client)
-    create_code_changes_table(client)
-    create_session_mappings_table(client)
     create_trace_stats_table(client)
 
     # Create indexes

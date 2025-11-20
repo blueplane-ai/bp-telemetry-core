@@ -316,8 +316,7 @@ CREATE INDEX IF NOT EXISTS idx_conversations_workspace
 #### Step 5: Update Foreign Key Relationships
 
 ```sql
--- Ensure conversation_turns and code_changes still reference conversations correctly
--- These tables don't need changes, but verify foreign keys are intact
+-- Verify foreign keys are intact
 PRAGMA foreign_key_check;
 ```
 

@@ -338,9 +338,14 @@ class TelemetryServer:
             if self.session_monitor:
                 def run_session_monitor():
                     import asyncio
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self.session_monitor.start())
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(self.session_monitor.start())
+                    except Exception as e:
+                        logger.error(f"Cursor session monitor thread crashed: {e}", exc_info=True)
                 
                 session_thread = threading.Thread(target=run_session_monitor, daemon=True)
                 session_thread.start()

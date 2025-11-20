@@ -488,28 +488,6 @@ CREATE TABLE conversations (
     ),
     UNIQUE(external_id, platform)
 );
-
-CREATE TABLE conversation_turns (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL REFERENCES conversations(id),
-    turn_number INTEGER NOT NULL,
-    turn_type TEXT,
-    content_hash TEXT,
-    tokens_used INTEGER,
-    latency_ms INTEGER
-);
-
-CREATE TABLE code_changes (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL REFERENCES conversations(id),
-    turn_id TEXT REFERENCES conversation_turns(id),
-    file_extension TEXT,
-    operation TEXT,
-    lines_added INTEGER,
-    lines_removed INTEGER,
-    accepted BOOLEAN,
-    acceptance_delay_ms INTEGER
-);
 ```
 
 **Characteristics:**

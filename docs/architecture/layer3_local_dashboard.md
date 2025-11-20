@@ -235,7 +235,6 @@ class RealtimeMetricsProvider:
         Get recent events from SQLite for activity timeline.
 
         - Query SQLite conversations table for recent turns
-        - Join with code_changes for file modifications
         - Return list of events with timestamps
         - ORDER BY timestamp DESC LIMIT limit
         """
