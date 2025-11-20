@@ -43,6 +43,17 @@ cursor:
       - history.entries
       - cursorAuth/workspaceOpenedDate
 
+  # Unified Cursor Monitor (replaces database_monitor + markdown_monitor)
+  unified_monitor:
+    enabled: true  # Set to true to use UnifiedCursorMonitor
+
+    # Timing configuration
+    query_timeout_seconds: 1.5
+    debounce_delay_seconds: 10.0
+    poll_interval_seconds: 60.0  # Polling fallback interval
+    cache_ttl_seconds: 300  # 5 minutes
+    max_retries: 3
+
   # DuckDB sink (future feature)
   duckdb_sink:
     enabled: false  # Feature flag - not yet implemented
