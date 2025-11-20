@@ -35,7 +35,7 @@ INSERT INTO raw_traces (
 # Prepared INSERT statement for claude_raw_traces (Claude Code)
 INSERT_CLAUDE_QUERY = """
 INSERT INTO claude_raw_traces (
-    event_id, session_id, event_type, platform, timestamp,
+    event_id, external_id, event_type, platform, timestamp,
     uuid, parent_uuid, request_id, agent_id,
     workspace_hash, project_name, is_sidechain, user_type, cwd, version, git_branch,
     message_role, message_model, message_id, message_type, stop_reason, stop_sequence,
@@ -278,9 +278,19 @@ class SQLiteBatchWriter:
             if isinstance(content, list):
                 tool_calls_count = sum(1 for item in content if isinstance(item, dict) and item.get('type') == 'tool_use')
 
+        # Extract external_id from event top-level (set by jsonl_monitor)
+        external_id = event.get('session_id', '')
+        
+        # Warn if external_id is still empty (shouldn't happen for valid events)
+        if not external_id:
+            logger.warning(
+                f"Claude Code event missing external_id: event_id={entry_data.get('uuid', 'unknown')}, "
+                f"event_type={entry_data.get('type', 'unknown')}"
+            )
+
         return {
             'event_id': entry_data.get('uuid', ''),
-            'session_id': entry_data.get('sessionId', event.get('session_id', '')),
+            'external_id': external_id,
             'event_type': entry_data.get('type', ''),
             'platform': 'claude_code',
             'timestamp': entry_data.get('timestamp', event.get('timestamp', '')),
@@ -362,7 +372,7 @@ class SQLiteBatchWriter:
             # Build row tuple (39 fields)
             row = (
                 fields['event_id'],
-                fields['session_id'],
+                fields['external_id'],
                 fields['event_type'],
                 fields['platform'],
                 fields['timestamp'],

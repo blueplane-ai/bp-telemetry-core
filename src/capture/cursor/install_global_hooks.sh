@@ -22,14 +22,10 @@ echo ""
 echo "Creating hooks directory: $CURSOR_HOOKS_DIR"
 mkdir -p "$CURSOR_HOOKS_DIR"
 
-# Copy hook scripts
-echo "Copying hook scripts..."
-for hook in "$SCRIPT_DIR/hooks"/*.py; do
-    hook_name=$(basename "$hook")
-    echo "  - $hook_name"
-    cp "$hook" "$CURSOR_HOOKS_DIR/$hook_name"
-    chmod +x "$CURSOR_HOOKS_DIR/$hook_name"
-done
+# Note: We no longer install hook scripts since we only listen for extension
+# session_start and session_end events. The extension sends these events directly
+# to Redis, so hooks are not needed.
+echo "Skipping hook scripts (using extension events only)..."
 
 # Copy base module
 echo "Copying hook_base.py..."
@@ -52,24 +48,15 @@ echo "Copying session event sender..."
 cp "$SCRIPT_DIR/send_session_event.py" "$CURSOR_HOOKS_DIR/send_session_event.py"
 chmod +x "$CURSOR_HOOKS_DIR/send_session_event.py"
 
-# Merge hooks.json configuration
-echo "Merging hooks.json configuration..."
-chmod +x "$SCRIPT_DIR/merge_hooks_json.py"
-if python3 "$SCRIPT_DIR/merge_hooks_json.py" "$CURSOR_HOOKS_DIR" "$HOME/.cursor/hooks.json"; then
-    echo "  ✅ hooks.json merged successfully"
-else
-    echo "  ⚠️  Warning: Failed to merge hooks.json"
-    exit 1
-fi
+# Note: We no longer merge hooks.json since we don't install any hooks.
+# The extension handles session_start and session_end events directly.
+echo "Skipping hooks.json merge (no hooks to register)..."
 
 echo ""
-echo "✅ Global hooks installed successfully!"
+echo "✅ Installation complete!"
 echo ""
-echo "Installed to: $CURSOR_HOOKS_DIR"
-echo ""
-echo "These hooks will fire for ALL Cursor workspaces."
-echo "The Cursor extension will send session start/end events"
-echo "to track which workspace is active."
+echo "The Cursor extension will send session_start and session_end events"
+echo "directly to Redis to track workspace sessions."
 echo ""
 echo "Next steps:"
 echo "  1. Install and activate the Cursor extension"

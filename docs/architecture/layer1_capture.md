@@ -33,8 +33,9 @@ graph TB
 
     subgraph "Cursor Implementation"
         CI[Cursor IDE] -->|Extension API| CE[Cursor Extension]
-        CE -->|Environment Vars| CH[Cursor Hooks]
-        CH -->|Hook Events| MQW2[Message Queue Writer]
+        CE -->|IDE Events| MQW2[Message Queue Writer]
+        CI -->|SQLite DB| DBM[Database Monitor]
+        DBM -->|DB Traces| MQW2
     end
 
     subgraph "Shared Components"
@@ -243,46 +244,17 @@ def main():
 
 ## Cursor Implementation
 
-### 3.1 Hook System
+### 3.1 Cursor Extension
 
-**Location**: `.cursor/hooks/telemetry/`
+**Note**: Cursor uses an extension-based approach for telemetry capture, not hooks. All event capture is handled by the VSCode extension and database monitoring in the processing server.
 
-**Hook Names and Events** (Different from Claude Code):
-- `beforeSubmitPrompt` - Before user prompt submission
-- `afterAgentResponse` - After AI response
-- `beforeMCPExecution` - Before MCP tool execution
-- `afterMCPExecution` - After MCP tool execution
-- `afterFileEdit` - After file modification
-- `beforeShellExecution` - Before shell command
-- `afterShellExecution` - After shell command
-- `beforeReadFile` - Before file read
-- `stop` - Session termination
+**Location**: `src/capture/cursor/extension/`
 
-**Hook Script Structure**:
-```python
-#!/usr/bin/env python3
-# Cursor Telemetry - Before Submit Prompt Hook (pseudocode)
-# Zero dependencies - stdlib only
-
-def main():
-    """
-    Cursor hook pattern (different from Claude Code).
-
-    - Parse command-line args (--workspace-root, --generation-id, --prompt-length)
-    - Get session_id from environment variable CURSOR_SESSION_ID (set by extension)
-    - Exit silently if no session_id (extension not active)
-    - Build event dict with hook_type, timestamp, generation_id, etc.
-    - Write to message queue via MessageQueueWriter
-    - Always exit 0 (never block Cursor)
-    - Fail silently on all errors
-    """
-```
-
-### 3.2 Cursor Extension
-
-**Location**: `.cursor/extensions/telemetry-session-manager/`
-
-**Purpose**: Manages session IDs and sends session events to Redis. **Note**: Database monitoring is handled by the Python processing server, not the extension.
+**Purpose**: 
+- Manages session IDs and lifecycle
+- Captures IDE events directly
+- Sends all events to Redis message queue
+- Coordinates with database monitor (runs in processing server)
 
 **Extension Components** (TypeScript pseudocode):
 
@@ -294,8 +266,9 @@ export async function activate(context: vscode.ExtensionContext) {
      * Extension activation.
      *
      * - Create SessionManager
-     * - Start new session (sets CURSOR_SESSION_ID environment variable)
+     * - Start new session and generate session ID
      * - Send session_start events to Redis
+     * - Capture IDE events (file edits, commands, etc.)
      * - Register VSCode commands (showStatus, newSession)
      * 
      * Note: Database monitoring is handled by Python processing server,
@@ -418,58 +391,52 @@ python verify_claude_hooks.py
 # 1. Obtain the Blueplane capture SDK
 # (Source code should be available in the project)
 
-# 2. Install Cursor extension (if using extension-based capture)
-cd extensions/cursor-telemetry
+# 2. Install Cursor extension (handles all telemetry capture)
+cd src/capture/cursor/extension
 npm install
 npm run compile
 # Then install via Cursor: Extensions → Install from VSIX
 
-# 3. Install project-level hooks
-python install_cursor_project.py --workspace /path/to/project
+# 3. Start processing server (includes database monitor)
+python scripts/start_server.py
 
-# This will:
-# - Copy hooks to .cursor/hooks/telemetry/
-# - Create .cursor/hooks.json configuration
-# - Initialize session management
-# - Set up database monitoring
+# The processing server includes:
+# - Database monitor (polls Cursor's SQLite database)
+# - Fast path consumer (processes events from Redis)
+# - Session monitor (tracks active sessions)
 ```
 
 **Manual Installation**:
 ```bash
-# 1. Copy hook files from the SDK
-mkdir -p .cursor/hooks/telemetry
-cp <sdk-path>/hooks/cursor/* .cursor/hooks/telemetry/
+# 1. Build and package extension
+cd src/capture/cursor/extension
+npm install
+npm run compile
+npx vsce package
 
-# 2. Create hooks.json
-cat > .cursor/hooks.json << 'EOF'
-{
-  "version": 1,
-  "hooks": {
-    "beforeSubmitPrompt": [
-      {"command": "hooks/telemetry/before_submit_prompt.py"}
-    ],
-    "afterAgentResponse": [
-      {"command": "hooks/telemetry/after_agent_response.py"}
-    ],
-    "afterFileEdit": [
-      {"command": "hooks/telemetry/after_file_edit.py"}
-    ],
-    // ... other hooks
-  }
-}
-EOF
+# 2. Install extension in Cursor
+# Open Cursor → Extensions → Install from VSIX → Select the .vsix file
 
-# 3. Install extension manually via Cursor UI
+# 3. Configure Redis connection (optional)
+# Extension settings: blueplane.redisHost and blueplane.redisPort
+
+# 4. Start processing server
+python scripts/start_server.py
 ```
 
 **Verification**:
 ```bash
-# Test hook and extension installation
-python verify_cursor_installation.py
+# Check extension is active in Cursor
+# Extensions → Blueplane Telemetry → Verify installed and enabled
 
-# Expected output:
-# ✅ Extension installed and active
-# ✅ Session manager running
+# Check processing server is running
+ps aux | grep start_server.py
+
+# Monitor Redis for events
+redis-cli XLEN telemetry:events
+redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+
+# Expected: Events appearing in Redis stream
 # ✅ Database monitor active
 # ✅ All hooks configured
 # ✅ Message queue accessible
@@ -504,16 +471,18 @@ class UniversalInstaller:
        - Update ~/.claude/settings.json with hook configuration
        - Update hooks to use Redis connection settings
     4. install_cursor():
-       - Copy hooks/*.py to .cursor/hooks/telemetry/
-       - Create .cursor/hooks.json with hook configuration
-       - Optionally install VSCode extension
-       - Update hooks to use Redis connection settings
+       - Install VSCode extension (required)
+       - Configure extension settings (Redis connection)
+       - Start processing server with database monitor
+       - Set up session management
     5. configure_privacy():
        - Write ~/.blueplane/config.yaml with privacy settings
     6. verify():
        - Check Redis is running (redis-cli PING)
        - Verify consumer groups exist
-       - Check all hooks exist and are configured
+       - Check Claude Code hooks exist and are configured (if installed)
+       - Check Cursor extension is installed and active (if installed)
+       - Verify processing server is running
        - Display installation status
 
     CLI options:
@@ -547,29 +516,30 @@ python install.py --dry-run
 
 | Aspect | Claude Code | Cursor |
 |--------|-------------|---------|
-| **Hook Names** | SessionStart, PreToolUse, PostToolUse, UserPromptSubmit, Stop, PreCompact | beforeSubmitPrompt, afterAgentResponse, beforeMCPExecution, afterMCPExecution, afterFileEdit, etc. |
-| **Hook Input** | JSON via stdin | Command-line arguments |
-| **Session ID** | Provided directly in hook events | Environment variable set by extension |
-| **Extension Required** | No | Yes (for session management only) |
+| **Capture Method** | Python hooks via stdin | VSCode extension + database monitor |
+| **Hook Names** | SessionStart, PreToolUse, PostToolUse, UserPromptSubmit, Stop, PreCompact | N/A (no hooks) |
+| **Hook Input** | JSON via stdin | N/A |
+| **Session ID** | Provided directly in hook events | Generated by extension |
+| **Extension Required** | No | Yes (required for all capture) |
 | **Database Traces** | Via transcript files | Python processing server monitors SQLite |
-| **Hook Location** | ~/.claude/hooks/telemetry/ | .cursor/hooks/telemetry/ (project-level) |
-| **Configuration** | Claude settings.json | .cursor/hooks.json |
-| **Python Runtime** | uv (self-executing) | System Python |
-| **Dependencies** | None (stdlib only) | None for hooks, Node.js for extension |
+| **Hook Location** | ~/.claude/hooks/telemetry/ | N/A (extension-based) |
+| **Configuration** | Claude settings.json | Extension settings + config files |
+| **Python Runtime** | uv (self-executing) | System Python (for processing server) |
+| **Dependencies** | None (stdlib only for hooks) | Node.js for extension |
 
 ### Data Capture Comparison
 
 | Data Type | Claude Code | Cursor |
 |-----------|-------------|---------|
 | **Session Management** | Native session IDs from Claude | Extension-generated session IDs |
-| **Prompt Text** | Via transcript file | Via beforeSubmitPrompt hook + DB |
-| **AI Responses** | Via transcript file | Via afterAgentResponse hook |
-| **Tool Execution** | Pre/PostToolUse hooks | before/afterMCPExecution hooks |
-| **File Changes** | PostToolUse with Edit tool | afterFileEdit hook with full edits |
-| **Model Info** | In transcript metadata | From database traces |
-| **Token Usage** | In transcript messages | From database generation data |
+| **Prompt Text** | Via transcript file | From database monitor (state.vscdb) |
+| **AI Responses** | Via transcript file | From database monitor (state.vscdb) |
+| **Tool Execution** | Pre/PostToolUse hooks | From database monitor |
+| **File Changes** | PostToolUse with Edit tool | Extension captures + database monitor |
+| **Model Info** | In transcript metadata | From database traces (when available) |
+| **Token Usage** | In transcript messages | From database generation data (when available) |
 | **Context Management** | PreCompact hook | Not available |
-| **Shell Commands** | Via PostToolUse | before/afterShellExecution hooks |
+| **Shell Commands** | Via PostToolUse | From database monitor |
 
 ## Privacy Controls
 

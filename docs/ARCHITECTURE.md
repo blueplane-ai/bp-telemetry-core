@@ -449,42 +449,44 @@ CREATE INDEX idx_raw_date_hour ON raw_traces(event_date, event_hour);
 
 **Database**: `~/.blueplane/telemetry.db` (same file as raw traces)
 
-**Schema:**
+**Schema Design:**
+
+> **📘 See [SESSION_CONVERSATION_SCHEMA.md](./SESSION_CONVERSATION_SCHEMA.md) for complete schema design, rationale, and migration strategy.**
+
+The schema handles platform differences:
+- **Claude Code**: Sessions and conversations are 1:1 (no separate session concept)
+- **Cursor**: Sessions represent IDE windows, which can contain multiple conversations
 
 ```sql
+-- Cursor Sessions (Cursor only - Claude has no session concept)
+CREATE TABLE cursor_sessions (
+    id TEXT PRIMARY KEY,
+    external_session_id TEXT NOT NULL UNIQUE,
+    workspace_hash TEXT NOT NULL,
+    workspace_name TEXT,
+    workspace_path TEXT,
+    started_at TIMESTAMP NOT NULL,
+    ended_at TIMESTAMP,
+    metadata TEXT DEFAULT '{}'
+);
+
+-- Conversations (unified for both platforms)
 CREATE TABLE conversations (
     id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
+    session_id TEXT,  -- NULL for Claude, references cursor_sessions.id for Cursor
+    external_id TEXT NOT NULL,  -- Platform-specific external ID
     platform TEXT NOT NULL,
-    created_at TIMESTAMP,
-    interaction_count INTEGER,
-    acceptance_rate REAL,
-    total_lines_added INTEGER,
-    total_lines_removed INTEGER
-);
-
-CREATE TABLE conversation_turns (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT,
-    turn_number INTEGER,
-    turn_type TEXT,
-    content_hash TEXT,
-    tokens_used INTEGER,
-    latency_ms INTEGER,
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-);
-
-CREATE TABLE code_changes (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT,
-    turn_id TEXT,
-    file_extension TEXT,
-    operation TEXT,
-    lines_added INTEGER,
-    lines_removed INTEGER,
-    accepted BOOLEAN,
-    acceptance_delay_ms INTEGER,
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+    workspace_hash TEXT,
+    workspace_name TEXT,
+    started_at TIMESTAMP NOT NULL,
+    ended_at TIMESTAMP,
+    -- ... metrics and JSON fields ...
+    FOREIGN KEY (session_id) REFERENCES cursor_sessions(id),
+    CHECK (
+        (platform = 'cursor' AND session_id IS NOT NULL) OR
+        (platform = 'claude_code' AND session_id IS NULL)
+    ),
+    UNIQUE(external_id, platform)
 );
 ```
 
@@ -492,6 +494,7 @@ CREATE TABLE code_changes (
 
 - Normalized relational structure
 - ACID transactions
+- Platform-aware schema (sessions only for Cursor)
 - Full-text search capable
 - ~10MB typical size
 
@@ -696,6 +699,7 @@ blueplane team aggregate *.json --output team_dashboard.json
 - [Layer 3 MCP Server](./architecture/layer3_mcp_server.md)
 - [Layer 3 Web Dashboard](./architecture/layer3_local_dashboard.md)
 - [Database Architecture](./architecture/layer2_db_architecture.md)
+- [Session & Conversation Schema Design](./SESSION_CONVERSATION_SCHEMA.md)
 
 ---
 

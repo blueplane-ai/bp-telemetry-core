@@ -352,7 +352,7 @@ def verify_database(session_id: str) -> bool:
     try:
         # 1. Check event count
         cursor.execute(
-            "SELECT COUNT(*) FROM claude_raw_traces WHERE session_id = ?",
+            "SELECT COUNT(*) FROM claude_raw_traces WHERE external_id = ?",
             (session_id,)
         )
         count = cursor.fetchone()[0]

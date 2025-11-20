@@ -20,41 +20,23 @@ def generate_hooks_json(hooks_dir: Path) -> Dict[str, Any]:
     """
     Generate hooks.json configuration from hook files.
     
+    Note: This function now returns an empty hooks configuration since we
+    only listen for extension session_start and session_end events, which
+    are sent directly to Redis and don't require hooks.
+    
     Args:
         hooks_dir: Directory containing hook Python files
         
     Returns:
-        Dictionary representing hooks.json structure
+        Dictionary representing hooks.json structure (empty hooks dict)
     """
-    # Map hook filenames to Cursor hook event names
-    hook_mapping = {
-        "before_submit_prompt.py": "beforeSubmitPrompt",
-        "after_agent_response.py": "afterAgentResponse",
-        "before_mcp_execution.py": "beforeMCPExecution",
-        "after_mcp_execution.py": "afterMCPExecution",
-        "after_file_edit.py": "afterFileEdit",
-        "before_shell_execution.py": "beforeShellExecution",
-        "after_shell_execution.py": "afterShellExecution",
-        "before_read_file.py": "beforeReadFile",
-        "stop.py": "stop",
-    }
-    
-    hooks_config = {}
-    
-    for hook_file, event_name in hook_mapping.items():
-        hook_path = hooks_dir / hook_file
-        if hook_path.exists():
-            hooks_config[event_name] = [
-                {
-                    "command": f"./hooks/{hook_file}"
-                }
-            ]
-    
+    # Return empty hooks configuration - we no longer install hooks
+    # The extension sends session_start and session_end events directly to Redis
     return {
         "$schema": "https://cursor.sh/hooks-schema.json",
         "version": 1,
-        "description": "Blueplane Telemetry Core - Cursor Global Hooks Configuration",
-        "hooks": hooks_config
+        "description": "Blueplane Telemetry Core - Cursor Extension Events Only (no hooks)",
+        "hooks": {}
     }
 
 

@@ -7,23 +7,31 @@ Run a comprehensive status check of all components:
 ```bash
 cd /Users/bbalaran/Dev/sierra/blueplane/bp-telemetry-core
 python3 scripts/check_status.py
+
+# Or check manually:
+# - Extension status in Cursor
+# - Processing server: ps aux | grep start_server.py
+# - Redis: redis-cli PING && redis-cli XLEN telemetry:events
 ```
 
 Or manually check each component:
 
 ```bash
-# 1. Check hooks
-ls -la ~/.cursor/hooks/*.py | wc -l
-cat ~/.cursor/hooks.json | jq '.hooks | length'
+# 1. Check Cursor extension
+# Open Cursor → Extensions → Search "Blueplane" → Verify it's installed and enabled
 
-# 2. Check Redis queue
+# 2. Check Claude Code hooks (if using Claude Code)
+ls -la ~/.claude/hooks/telemetry/*.py | wc -l
+cat ~/.claude/settings.json | jq '.hooks | length'
+
+# 3. Check Redis queue
 redis-cli XLEN telemetry:events
 redis-cli XINFO GROUPS telemetry:events
 
-# 3. Check database
+# 4. Check database
 sqlite3 ~/.blueplane/telemetry.db "SELECT COUNT(*) FROM raw_traces;"
 
-# 4. Check processing server
+# 5. Check processing server
 ps aux | grep start_server.py
 ```
 
@@ -47,34 +55,42 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 def check_hooks():
-    """Check hooks installation status."""
-    print("\n1️⃣  HOOKS STATUS")
+    """Check Claude Code hooks installation status."""
+    print("\n1️⃣  CLAUDE CODE HOOKS STATUS")
     print("-" * 70)
-    hooks_dir = Path.home() / ".cursor" / "hooks"
+    hooks_dir = Path.home() / ".claude" / "hooks" / "telemetry"
     if hooks_dir.exists():
         hook_files = list(hooks_dir.glob("*.py"))
-        print(f"✅ Hooks directory exists: {hooks_dir}")
+        print(f"✅ Claude Code hooks directory exists: {hooks_dir}")
         print(f"   Hook scripts found: {len(hook_files)}")
 
-        hooks_json = Path.home() / ".cursor" / "hooks.json"
-        if hooks_json.exists():
-            print(f"✅ hooks.json exists")
+        settings_json = Path.home() / ".claude" / "settings.json"
+        if settings_json.exists():
+            print(f"✅ settings.json exists")
             try:
-                with open(hooks_json) as f:
-                    hooks_config = json.load(f)
-                    hooks_dict = hooks_config.get("hooks", {})
+                with open(settings_json) as f:
+                    settings = json.load(f)
+                    hooks_dict = settings.get("hooks", {})
                     if isinstance(hooks_dict, dict):
-                        enabled = sum(1 for h in hooks_dict.values()
-                                    if isinstance(h, dict) and h.get("enabled", True))
-                        print(f"   Enabled hooks: {enabled}")
+                        enabled = len(hooks_dict)
+                        print(f"   Registered hooks: {enabled}")
             except Exception as e:
-                print(f"   ⚠️  Could not parse hooks.json: {e}")
+                print(f"   ⚠️  Could not parse settings.json: {e}")
         else:
-            print("⚠️  hooks.json not found")
+            print("⚠️  settings.json not found")
         return True
     else:
-        print("❌ Hooks directory not found!")
-        return False
+        print("⚠️  Claude Code hooks not installed (only needed if using Claude Code)")
+        return True  # Not an error if using Cursor only
+
+def check_cursor_extension():
+    """Check Cursor extension status."""
+    print("\n2️⃣  CURSOR EXTENSION STATUS")
+    print("-" * 70)
+    print("ℹ️  Check manually in Cursor:")
+    print("   Extensions → Search 'Blueplane' → Verify installed and enabled")
+    print("   View → Output → Select 'Blueplane Telemetry' to see logs")
+    return True
 
 def check_database_traces():
     """Check database trace monitoring setup."""
@@ -342,17 +358,29 @@ watch -n 1 'redis-cli XLEN telemetry:events'
 Database has events but `model` and `tokens_used` columns are empty/NULL.
 
 **Cause:**
-Using old hook scripts that only capture metadata, not full content.
+Database monitor may not be extracting all available data from Cursor's SQLite database, or the data may not be available in Cursor's database schema.
 
 **Solution:**
 
+For **Cursor**:
 ```bash
-# Reinstall updated hooks with full content capture
-cd src/capture/cursor
-./install_global_hooks.sh
+# Ensure processing server with database monitor is running
+python scripts/start_server.py
 
-# Restart Cursor
+# Check database monitor logs for extraction errors
+# Restart Cursor to ensure fresh database state
 # Command Palette → "Developer: Reload Window"
+
+# Note: Cursor's database may not always contain model/token data
+# This is a limitation of Cursor's database schema
+```
+
+For **Claude Code**:
+```bash
+# Reinstall hooks to ensure latest version
+python scripts/install_claude_code.py
+
+# Restart Claude Code
 ```
 
 **Verify:**
@@ -420,28 +448,37 @@ Cursor extension not running or database monitor failed to start.
 
 ---
 
-### 5. Permission Denied on Hook Installation
+### 5. Permission Denied on Extension or Hook Installation
 
 **Error:**
 
 ```
-cp: /Users/username/.cursor/hooks/...: Operation not permitted
+Permission denied when installing extension or hooks
 ```
 
 **Cause:**
-Sandbox restrictions or file system permissions.
+Insufficient permissions for installation.
 
 **Solution:**
 
+For **Cursor extension**:
 ```bash
-# Install with sudo if needed
-sudo ./install_global_hooks.sh
+# Install extension through Cursor UI instead
+# Open Cursor → Extensions → Install from VSIX → Select the .vsix file
 
-# Or manually:
-sudo mkdir -p ~/.cursor/hooks
-sudo cp hooks/*.py ~/.cursor/hooks/
-sudo cp -r ../shared ~/.cursor/hooks/
-sudo chmod +x ~/.cursor/hooks/*.py
+# Or check file permissions on the extension directory
+ls -la src/capture/cursor/extension/
+```
+
+For **Claude Code hooks**:
+```bash
+# Install with appropriate permissions
+python scripts/install_claude_code.py
+
+# Or manually with sudo if needed:
+sudo mkdir -p ~/.claude/hooks/telemetry
+sudo cp src/capture/claude_code/hooks/*.py ~/.claude/hooks/telemetry/
+sudo chmod +x ~/.claude/hooks/telemetry/*.py
 ```
 
 ---
@@ -614,8 +651,10 @@ ps aux | grep start_server.py
 # Run end-to-end test
 python scripts/test_end_to_end.py
 
-# Check installation
-python scripts/verify_installation.py
+# Check installation manually:
+# - Extension status in Cursor
+# - Processing server: ps aux | grep start_server.py
+# - Redis: redis-cli PING && redis-cli XLEN telemetry:events
 ```
 
 ---

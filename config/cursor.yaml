@@ -1,0 +1,63 @@
+# Copyright © 2025 Sierra Labs LLC
+# SPDX-License-Identifier: AGPL-3.0-only
+# License-Filename: LICENSE
+
+# Cursor Monitoring Configuration
+# Database monitoring and Markdown history generation
+
+cursor:
+  # Database monitoring (for AI generations)
+  database_monitor:
+    enabled: true
+    poll_interval_seconds: 30
+    sync_window_hours: 24
+    query_timeout_seconds: 1.5
+    max_retries: 3
+    retry_backoff_seconds: 2
+    dedup_window_hours: 24
+    max_concurrent_workspaces: 10
+
+  # Markdown history generation
+  markdown_monitor:
+    enabled: true
+    
+    # Output configuration
+    output_dir: null  # null = use workspace/.history/, otherwise specify absolute path
+    
+    # Timing configuration
+    poll_interval_seconds: 120  # 2-minute polling fallback (safety net)
+    debounce_delay_seconds: 10  # Normal operation: 10-12s
+    # For dev/testing, use: debounce_delay_seconds: 2
+    
+    # Database query settings
+    query_timeout_seconds: 1.5
+    
+    # Keys to monitor in ItemTable
+    trace_keys:
+      - aiService.generations
+      - aiService.prompts
+      - composer.composerData
+      - workbench.backgroundComposer.workspacePersistentData
+      - workbench.agentMode.exitInfo
+      - interactive.sessions
+      - history.entries
+      - cursorAuth/workspaceOpenedDate
+
+  # DuckDB sink (future feature)
+  duckdb_sink:
+    enabled: false  # Feature flag - not yet implemented
+    database_path: null  # null = use ~/.blueplane/cursor_history.duckdb
+    
+# Logging configuration for Cursor monitoring
+logging:
+  # Log levels: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: INFO
+  
+  # Structured logging
+  format: json  # Options: json, text
+  include_context: true
+  
+  # Workspace/session mapping logs
+  log_workspace_mapping: true
+  log_session_lifecycle: true
+  log_markdown_writes: true

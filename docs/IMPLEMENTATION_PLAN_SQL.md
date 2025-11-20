@@ -90,8 +90,9 @@ class SQLiteClient:
    - event_date, event_hour (generated columns)
 
 2. **conversations** table (for future use)
-3. **conversation_turns** table (for future use)
-4. **code_changes** table (for future use)
+3. **conversation_turns** table - Not yet implemented
+4. **code_changes** table - Not yet implemented
+5. **session_mappings** table - Not yet implemented
 
 **Key Functions**:
 ```python

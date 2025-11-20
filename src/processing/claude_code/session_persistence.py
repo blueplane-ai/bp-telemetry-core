@@ -160,9 +160,9 @@ class SessionPersistence:
             metadata: Additional session metadata
         """
         try:
-            # Generate conversation ID (use session_id as external_session_id)
+            # Generate conversation ID (use session_id as external_id)
             conversation_id = str(uuid.uuid4())
-            external_session_id = session_id
+            external_id = session_id  # For Claude, external_id is the session/conversation ID
             
             # Try to read workspace path/name directly from JSONL (cwd)
             jsonl_workspace_path = _extract_workspace_path_from_jsonl(session_id)
@@ -196,15 +196,15 @@ class SessionPersistence:
             with self.sqlite_client.get_connection() as conn:
                 cursor = conn.execute("""
                     INSERT OR REPLACE INTO conversations (
-                        id, session_id, external_session_id, platform,
+                        id, session_id, external_id, platform,
                         workspace_hash, workspace_name, started_at,
                         context, metadata,
                         interaction_count, total_tokens, total_changes
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     conversation_id,
-                    session_id,
-                    external_session_id,
+                    None,  # session_id is NULL for Claude Code
+                    external_id,
                     'claude_code',
                     workspace_hash,
                     workspace_name,
@@ -234,16 +234,16 @@ class SessionPersistence:
         Called when session_end event is received or timeout occurs.
 
         Args:
-            session_id: Session identifier
+            session_id: Session identifier (used as external_id for Claude Code)
             end_reason: Reason for session end ('normal', 'timeout', 'crash')
         """
         try:
             with self.sqlite_client.get_connection() as conn:
-                # Update ended_at timestamp
+                # Update ended_at timestamp (use external_id for Claude Code)
                 cursor = conn.execute("""
                     UPDATE conversations
                     SET ended_at = ?
-                    WHERE session_id = ? AND platform = 'claude_code'
+                    WHERE external_id = ? AND platform = 'claude_code'
                 """, (
                     datetime.now(timezone.utc).isoformat(),
                     session_id
@@ -255,7 +255,7 @@ class SessionPersistence:
                     # Update metadata with end reason
                     cursor = conn.execute("""
                         SELECT metadata FROM conversations
-                        WHERE session_id = ? AND platform = 'claude_code'
+                        WHERE external_id = ? AND platform = 'claude_code'
                     """, (session_id,))
                     
                     row = cursor.fetchone()
@@ -268,7 +268,7 @@ class SessionPersistence:
                             cursor = conn.execute("""
                                 UPDATE conversations
                                 SET metadata = ?
-                                WHERE session_id = ? AND platform = 'claude_code'
+                                WHERE external_id = ? AND platform = 'claude_code'
                             """, (
                                 json.dumps(metadata),
                                 session_id
@@ -296,7 +296,7 @@ class SessionPersistence:
             with self.sqlite_client.get_connection() as conn:
                 cursor = conn.execute("""
                     SELECT
-                        session_id, workspace_hash, workspace_name, context, metadata, started_at
+                        external_id, workspace_hash, workspace_name, context, metadata, started_at
                     FROM conversations
                     WHERE platform = 'claude_code' AND ended_at IS NULL
                     ORDER BY started_at DESC
@@ -306,7 +306,13 @@ class SessionPersistence:
                 recovered = {}
                 
                 for row in rows:
-                    session_id = row[0]
+                    session_id = row[0]  # external_id for Claude Code
+                    
+                    # Skip if session_id is None or empty (shouldn't happen, but safety check)
+                    if not session_id:
+                        logger.warning(f"Skipping recovered session with None/empty external_id")
+                        continue
+                    
                     workspace_hash = row[1]
                     workspace_name = row[2] or ''
                     context_str = row[3] or '{}'
@@ -379,14 +385,14 @@ class SessionPersistence:
             workspace_name = _extract_workspace_name(workspace_path)
 
             with self.sqlite_client.get_connection() as conn:
-                # Update workspace information
+                # Update workspace information (use external_id for Claude Code)
                 cursor = conn.execute("""
                     UPDATE conversations
                     SET workspace_hash = ?,
                         workspace_name = ?,
                         context = json_set(context, '$.workspace_path', ?),
                         metadata = json_set(metadata, '$.workspace_path', ?)
-                    WHERE session_id = ? AND platform = 'claude_code'
+                    WHERE external_id = ? AND platform = 'claude_code'
                 """, (
                     workspace_hash,
                     workspace_name,
@@ -418,11 +424,11 @@ class SessionPersistence:
             with self.sqlite_client.get_connection() as conn:
                 cursor = conn.execute("""
                     SELECT
-                        session_id, workspace_hash, workspace_name, context, metadata,
+                        id, external_id, workspace_hash, workspace_name, context, metadata,
                         started_at, ended_at,
                         interaction_count, total_tokens, total_changes
                     FROM conversations
-                    WHERE session_id = ? AND platform = 'claude_code'
+                    WHERE external_id = ? AND platform = 'claude_code'
                 """, (session_id,))
                 
                 row = cursor.fetchone()
@@ -430,25 +436,25 @@ class SessionPersistence:
                     return None
                 
                 try:
-                    context = json.loads(row[3]) if row[3] else {}
-                    metadata = json.loads(row[4]) if row[4] else {}
+                    context = json.loads(row[4]) if row[4] else {}
+                    metadata = json.loads(row[5]) if row[5] else {}
                 except json.JSONDecodeError:
                     context = {}
                     metadata = {}
                 
                 # Use workspace_name from database or fallback to context/metadata
-                workspace_name = row[2] or context.get('workspace_name') or metadata.get('workspace_name') or ''
+                workspace_name = row[3] or context.get('workspace_name') or metadata.get('workspace_name') or ''
                 
                 return {
-                    'session_id': row[0],
-                    'workspace_hash': row[1],
+                    'session_id': row[1],  # external_id (Claude session/conversation ID)
+                    'workspace_hash': row[2],
                     'workspace_name': workspace_name,
                     'workspace_path': context.get('workspace_path', ''),
-                    'started_at': row[5],
-                    'ended_at': row[6],
-                    'interaction_count': row[7],
-                    'total_tokens': row[8],
-                    'total_changes': row[9],
+                    'started_at': row[6],
+                    'ended_at': row[7],
+                    'interaction_count': row[8],
+                    'total_tokens': row[9],
+                    'total_changes': row[10],
                     'metadata': metadata,
                 }
         except Exception as e:

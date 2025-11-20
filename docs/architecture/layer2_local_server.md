@@ -166,15 +166,15 @@ class SessionManager:
         - Check for existing mapping by (external_id, platform, project_hash)
         - If exists: Update last_seen, return existing Session
         - If not: Generate new UUID, insert mapping, return new Session
-        - Schema: session_mappings table (see database_architecture_detailed.md)
+        - Note: session_mappings table not yet implemented
         """
 
     def get_by_external(external_id: str, platform: str) -> Optional[Session]:
         """
         Look up internal session by external ID.
 
-        - Query session_mappings WHERE external_id = ? AND platform = ?
-        - Return most recent by last_seen
+        - Note: session_mappings table not yet implemented
+        - Currently returns None
         """
 ```
 
@@ -357,7 +357,7 @@ class StorageManager:
         Retrieve session history by external or internal ID.
 
         - Map external_id to internal UUID if needed
-        - Get project_hash and platform from session_mappings
+        - Note: session_mappings table not yet implemented
         - Read events.jsonl from hierarchical storage
         - Return parsed events list
         """
@@ -365,7 +365,7 @@ class StorageManager:
     async def _update_session_activity(session_uuid: str):
         """
         Update last_seen timestamp for session.
-        - UPDATE session_mappings SET last_seen = NOW()
+        - Note: session_mappings table not yet implemented
         """
 ```
 

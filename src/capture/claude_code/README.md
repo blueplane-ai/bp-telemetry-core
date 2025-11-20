@@ -6,6 +6,8 @@ This directory contains the **Claude Code telemetry capture implementation** for
 
 Claude Code hooks receive JSON input via stdin at key points during AI-assisted development sessions. These hooks capture telemetry and send events to Redis Streams for processing.
 
+**Important**: Claude Code has **no separate session concept**. Sessions and conversations are 1:1—when a Claude Code session starts, a conversation is created immediately. Only conversations are tracked in the database (no `cursor_sessions`-equivalent table). See [Session & Conversation Schema](../../../docs/SESSION_CONVERSATION_SCHEMA.md) for details.
+
 ## Architecture
 
 ```
@@ -29,12 +31,15 @@ Hooks are installed globally at: `~/.claude/hooks/telemetry/`
 ### Available Hooks
 
 1. **`session_start.py`** - SessionStart hook
-   - Fires at the start of a new Claude Code session
-   - Captures session initialization metadata
+   - Fires at the start of a new Claude Code session/conversation
+   - Creates a conversation record in `conversations` table (no separate session table)
+   - The `session_id` from Claude Code becomes the `external_id` in conversations table
+   - `conversations.session_id` is set to NULL (Claude Code has no session concept)
    - Input: `{"session_id": "...", "source": "startup"}`
 
 2. **`session_end.py`** - SessionEnd hook
-   - Fires at the end of a session (when Claude Code closes)
+   - Fires at the end of a session/conversation (when Claude Code closes)
+   - Updates the conversation record with `ended_at` timestamp
    - Captures final transcript path for processing
    - Input: `{"session_id": "...", "transcript_path": "..."}`
 

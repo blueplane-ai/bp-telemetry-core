@@ -451,20 +451,26 @@ class CursorDatabaseMonitor:
             }
 
             # Build event
+            external_session_id = session_info.get("external_session_id") or session_info.get("session_id")
+            internal_session_id = session_info.get("internal_session_id")
+
             event = {
                 "version": "0.1.0",
                 "hook_type": "DatabaseTrace",
                 "event_type": "database_trace",
                 "timestamp": timestamp_iso or time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime()),
                 "platform": "cursor",
-                "session_id": session_info["session_id"],
-                "external_session_id": session_info["session_id"],
+                "session_id": external_session_id,
+                "external_session_id": external_session_id,
                 "metadata": {
                     "workspace_hash": workspace_hash,
                     "source": "python_monitor",
                 },
                 "payload": payload,
             }
+
+            if internal_session_id:
+                event["metadata"]["internal_session_id"] = internal_session_id
 
             # Send to Redis
             self.redis_client.xadd(

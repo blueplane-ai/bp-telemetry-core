@@ -3,6 +3,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # License-Filename: LICENSE
 
+# DEPRECATED: This hook is no longer installed or used.
+# The cursor monitor now only listens for extension session_start and session_end events
+# sent directly to Redis. This file is kept for reference only.
+
 """
 Cursor afterFileEdit Hook (stdin/stdout)
 

@@ -106,6 +106,12 @@ class ClaudeCodeJSONLMonitor:
         # Track which sessions we're currently monitoring
         self.monitored_sessions: Set[str] = set()
 
+        # Track discovered files to avoid redundant INFO logs
+        self.discovered_files: Set[Path] = set()
+
+        # Cache discovered workspace paths: session_id → workspace_path
+        self.workspace_cache: Dict[str, str] = {}
+
         # Persisted file offsets via SQLite
         self.offset_store = JSONLOffsetStore(sqlite_client)
 
@@ -137,6 +143,10 @@ class ClaudeCodeJSONLMonitor:
 
                 # Monitor each active session
                 for session_id, session_info in active_sessions.items():
+                    # Skip sessions with None session_id (shouldn't happen, but safety check)
+                    if not session_id:
+                        logger.warning(f"Skipping session with None session_id: {session_info}")
+                        continue
                     await self._monitor_session(session_id, session_info)
 
                 # Clean up inactive sessions
@@ -153,20 +163,35 @@ class ClaudeCodeJSONLMonitor:
         try:
             workspace_path = session_info.get("workspace_path", "")
 
-            # If no workspace_path, try to discover it from existing JSONL files
+            # If no workspace_path, check cache first, then try to discover
             if not workspace_path:
-                logger.debug(f"No workspace_path for session {session_id}, attempting discovery...")
-                workspace_path = await self._discover_workspace_path(session_id)
-
-                if workspace_path:
-                    # Update session info with discovered workspace_path
-                    session_info["workspace_path"] = workspace_path
-                    if self.session_monitor:
-                        await self.session_monitor.update_session_workspace(session_id, workspace_path)
-                    logger.info(f"Discovered workspace_path for session {session_id}: {workspace_path}")
+                # Check cache first
+                if session_id in self.workspace_cache:
+                    workspace_path = self.workspace_cache[session_id]
+                    if workspace_path:  # Non-empty cached value
+                        logger.debug(f"Using cached workspace_path for session {session_id}: {workspace_path}")
+                        session_info["workspace_path"] = workspace_path
+                    else:  # Empty string means previous discovery failed
+                        logger.debug(f"Previous workspace discovery failed for session {session_id}, skipping")
+                        return
                 else:
-                    logger.warning(f"Could not discover workspace_path for session {session_id}")
-                    return
+                    logger.debug(f"No workspace_path for session {session_id}, attempting discovery...")
+                    workspace_path = await self._discover_workspace_path(session_id)
+
+                    if workspace_path:
+                        # Cache the discovered workspace path
+                        self.workspace_cache[session_id] = workspace_path
+                        # Update session info with discovered workspace_path
+                        session_info["workspace_path"] = workspace_path
+                        if self.session_monitor:
+                            await self.session_monitor.update_session_workspace(session_id, workspace_path)
+                        logger.info(f"Discovered workspace_path for session {session_id}: {workspace_path}")
+                    else:
+                        # Cache empty string to prevent repeated discovery attempts
+                        # (we'll retry only when session is restarted and cache is cleared)
+                        self.workspace_cache[session_id] = ""
+                        logger.warning(f"Could not discover workspace_path for session {session_id}")
+                        return
 
             # Find project directory
             project_dir = self._find_project_dir(workspace_path)
@@ -186,7 +211,12 @@ class ClaudeCodeJSONLMonitor:
             # Claude Code creates session files with the session_id as filename
             session_file = project_dir / f"{session_id}.jsonl"
             if session_file.exists():
-                logger.info(f"Found session file: {session_file}")
+                # Only log at INFO level for newly discovered files
+                if session_file not in self.discovered_files:
+                    self.discovered_files.add(session_file)
+                    logger.info(f"Found new session file: {session_file}")
+                else:
+                    logger.debug(f"Monitoring session file: {session_file}")
                 await self._monitor_file(session_file, session_id, session_info)
             else:
                 logger.debug(f"Session file not found: {session_file}")
@@ -494,6 +524,13 @@ class ClaudeCodeJSONLMonitor:
                 logger.debug(f"Agent file not found yet: {agent_file}")
                 continue
 
+            # Only log at INFO level for newly discovered agent files
+            if agent_file not in self.discovered_files:
+                self.discovered_files.add(agent_file)
+                logger.info(f"Found new agent file: {agent_file}")
+            else:
+                logger.debug(f"Monitoring agent file: {agent_file}")
+
             # Monitor the agent file
             await self._monitor_file(agent_file, session_id, session_info, agent_id=agent_id)
 
@@ -508,6 +545,25 @@ class ClaudeCodeJSONLMonitor:
             # Remove agent tracking
             if session_id in self.session_agents:
                 del self.session_agents[session_id]
+
+            # Remove from workspace cache
+            if session_id in self.workspace_cache:
+                del self.workspace_cache[session_id]
+
+            # Clean up discovered files for this session
+            # (Remove files associated with this session from discovered_files)
+            workspace_path = self.workspace_cache.get(session_id, "")
+            if workspace_path:
+                project_dir = self._find_project_dir(workspace_path)
+                if project_dir:
+                    # Remove session file from discovered set
+                    session_file = project_dir / f"{session_id}.jsonl"
+                    self.discovered_files.discard(session_file)
+
+                    # Remove agent files from discovered set
+                    for file_path in list(self.discovered_files):
+                        if file_path.parent == project_dir and "agent-" in file_path.name:
+                            self.discovered_files.discard(file_path)
 
             # Remove persisted offsets for this session
             try:

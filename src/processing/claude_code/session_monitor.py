@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Optional
 import redis
@@ -36,23 +37,33 @@ class ClaudeCodeSessionMonitor:
     - Used by JSONL monitor to know which sessions to track
     """
 
-    def __init__(self, redis_client: redis.Redis, sqlite_client: Optional[SQLiteClient] = None):
+    def __init__(
+        self,
+        redis_client: redis.Redis,
+        sqlite_client: Optional[SQLiteClient] = None,
+        stream_name: str = "telemetry:events",
+        consumer_group: str = "session_monitors",
+        consumer_name: str = "claude_code_session_monitor",
+    ):
         """
         Initialize Claude Code session monitor.
 
         Args:
             redis_client: Redis client for event streaming
             sqlite_client: Optional SQLite client for persistence (if None, persistence disabled)
+            stream_name: Redis stream name to read from
+            consumer_group: Consumer group name for Redis streams
+            consumer_name: Consumer name (unique per instance)
         """
         self.redis_client = redis_client
         self.sqlite_client = sqlite_client
+        self.stream_name = stream_name
+        self.consumer_group = consumer_group
+        self.consumer_name = consumer_name
 
         # Active sessions: session_id -> session_info (in-memory for fast lookups)
         self.active_sessions: Dict[str, dict] = {}
         self._lock = threading.Lock()
-
-        # Track last processed Redis message ID (for resuming)
-        self.last_redis_id = "0-0"
 
         # Session persistence (if sqlite_client provided)
         self.persistence: Optional[SessionPersistence] = None
@@ -60,83 +71,250 @@ class ClaudeCodeSessionMonitor:
             self.persistence = SessionPersistence(sqlite_client)
 
         self.running = False
+        
+        # Thread pool executor for running synchronous Redis calls
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="claude-session-redis")
 
     async def start(self):
         """
         Start monitoring sessions with recovery.
         
         Steps:
-        1. Recover incomplete sessions from database (if persistence enabled)
-        2. Catch up on historical Redis events
-        3. Start listening to new Redis events
+        1. Ensure consumer group exists
+        2. Recover incomplete sessions from database (if persistence enabled)
+        3. Process pending messages (from previous runs)
+        4. Start listening to new Redis events
         """
         self.running = True
 
-        # Step 1: Recover incomplete sessions from last run (if persistence enabled)
+        # Step 1: Ensure consumer group exists
+        self._ensure_consumer_group()
+
+        # Step 2: Recover incomplete sessions from last run (if persistence enabled)
         if self.persistence:
             await self._recover_active_sessions()
 
-        # Step 2: Process historical events first (catch up on existing sessions)
-        await self._catch_up_historical_events()
+        # Step 3: Process pending messages first (catch up on unprocessed messages)
+        await self._process_pending_messages()
 
         persistence_status = "with database persistence" if self.persistence else "(in-memory only)"
         logger.info(f"Claude Code session monitor started {persistence_status}")
 
-        # Step 3: Run Redis event listener directly (blocks until stopped)
+        # Step 4: Run Redis event listener directly (blocks until stopped)
+        logger.info("Starting Redis event listener loop...")
         await self._listen_redis_events()
 
-    async def _catch_up_historical_events(self):
-        """Process all historical session_start events from Redis."""
+    def _ensure_consumer_group(self) -> None:
+        """Ensure consumer group exists, create if not."""
         try:
-            start_id = self.last_redis_id or "0-0"
-            total_processed = 0
+            self.redis_client.xgroup_create(
+                self.stream_name,
+                self.consumer_group,
+                id='0',
+                mkstream=True
+            )
+            logger.info(
+                f"Created consumer group '{self.consumer_group}' for stream '{self.stream_name}'"
+            )
+        except redis.exceptions.ResponseError as e:
+            if "BUSYGROUP" not in str(e):
+                logger.error(f"Failed to create consumer group: {e}")
+                raise
+            logger.info(
+                f"Consumer group '{self.consumer_group}' already exists for stream '{self.stream_name}'"
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error creating consumer group: {e}", exc_info=True)
+            raise
 
-            while True:
-                messages = self.redis_client.xread(
-                    {"telemetry:events": start_id},
-                    count=1000,
-                    block=0  # Non-blocking
-                )
+    async def _process_pending_messages(self):
+        """Process pending messages from previous runs (messages in PEL)."""
+        logger.info(f"Checking for pending messages in consumer group '{self.consumer_group}'...")
+        try:
+            total_claude_events = 0
+            total_acked = 0
+            total_messages_read = 0
+            empty_reads = 0
+            max_empty_reads = 3  # Stop after 3 consecutive empty reads
+            max_iterations = 1000  # Safety limit to prevent infinite loops
+            seen_message_ids = set()  # Track processed message IDs to detect duplicates
 
-                if not messages:
+            iteration = 0
+            while iteration < max_iterations:
+                iteration += 1
+                try:
+                    # Read pending messages assigned to this consumer (using "0")
+                    # Note: "0" means read from PEL (Pending Entries List) for this consumer
+                    # Run in executor to avoid blocking event loop
+                    loop = asyncio.get_event_loop()
+                    messages = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            self._executor,
+                            lambda: self.redis_client.xreadgroup(
+                                groupname=self.consumer_group,
+                                consumername=self.consumer_name,
+                                streams={self.stream_name: "0"},  # "0" means read from PEL
+                                count=100,
+                                block=0  # Non-blocking (should return immediately)
+                            )
+                        ),
+                        timeout=5.0  # 5 second timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"xreadgroup call timed out after 5 seconds (iteration {iteration})")
+                    break
+                except redis.exceptions.ResponseError as e:
+                    # Handle Redis-specific errors (like NOGROUP)
+                    error_str = str(e)
+                    if "NOGROUP" in error_str:
+                        logger.warning(f"Consumer group '{self.consumer_group}' not found, skipping pending messages")
+                    else:
+                        logger.error(f"Redis error reading pending messages: {e}")
+                    break
+                except Exception as e:
+                    logger.error(f"Unexpected error reading pending messages: {e}", exc_info=True)
                     break
 
-                batch_count = 0
-                for stream, msgs in messages:
-                    for msg_id, fields in msgs:
-                        await self._process_redis_message(msg_id, fields)
-                        start_id = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
-                        self.last_redis_id = start_id
-                        total_processed += 1
-                        batch_count += 1
+                # Check if we have any messages
+                total_msgs_in_batch = 0
+                if messages:
+                    for stream, msgs in messages:
+                        total_msgs_in_batch += len(msgs)
 
-                logger.info(f"Processed {batch_count} historical Claude Code events (total: {total_processed})")
+                # If no messages, treat as empty read
+                if total_msgs_in_batch == 0:
+                    empty_reads += 1
+                    if empty_reads >= max_empty_reads:
+                        break
+                    await asyncio.sleep(0.1)  # Small delay before next read
+                    continue
+
+                empty_reads = 0  # Reset counter on successful read
+
+                batch_claude_events = 0
+                batch_acked = 0
+                batch_messages = 0
+                try:
+                    for stream, msgs in messages:
+                        if not msgs:
+                            continue
+                        for msg_id, fields in msgs:
+                            batch_messages += 1
+                            total_messages_read += 1
+                            
+                            # Decode message_id
+                            msg_id_str = msg_id.decode('utf-8') if isinstance(msg_id, bytes) else str(msg_id)
+                            
+                            # Safety check: if we've seen this message ID before, force-ACK it to prevent infinite loop
+                            if msg_id_str in seen_message_ids:
+                                try:
+                                    loop = asyncio.get_event_loop()
+                                    ack_result = await loop.run_in_executor(
+                                        self._executor,
+                                        lambda: self.redis_client.xack(
+                                            self.stream_name,
+                                            self.consumer_group,
+                                            msg_id_str
+                                        )
+                                    )
+                                    if ack_result == 1:
+                                        batch_acked += 1
+                                        total_acked += 1
+                                except Exception as e:
+                                    logger.error(f"Failed to force-ACK duplicate message {msg_id_str}: {e}")
+                                continue
+                            
+                            seen_message_ids.add(msg_id_str)
+                            
+                            # Check if this is a Claude Code event before processing
+                            event_type = self._decode_field(fields, 'event_type')
+                            platform = self._decode_field(fields, 'platform')
+                            is_claude_event = (
+                                platform == 'claude_code' and 
+                                event_type in ('session_start', 'session_end')
+                            )
+                            
+                            try:
+                                # Process message (will ACK filtered messages too)
+                                success = await self._process_redis_message(msg_id_str, fields)
+                                
+                                if is_claude_event:
+                                    batch_claude_events += 1
+                                    total_claude_events += 1
+                                
+                                # ACK if successfully processed (including filtered messages)
+                                # Errors will remain in PEL for retry
+                                if success:
+                                    try:
+                                        loop = asyncio.get_event_loop()
+                                        ack_result = await loop.run_in_executor(
+                                            self._executor,
+                                            lambda: self.redis_client.xack(
+                                                self.stream_name,
+                                                self.consumer_group,
+                                                msg_id_str
+                                            )
+                                        )
+                                        if ack_result == 1:
+                                            batch_acked += 1
+                                            total_acked += 1
+                                    except Exception as e:
+                                        logger.error(f"Failed to ACK message {msg_id_str}: {e}")
+                            except Exception as e:
+                                logger.error(f"Exception processing pending message {msg_id_str}: {e}")
+                                # Don't ACK on exception - let it retry
+                except Exception as e:
+                    logger.error(f"Exception iterating over messages batch: {e}", exc_info=True)
+                    break
+
                 await asyncio.sleep(0)  # Yield control during long catch-up
 
-            if total_processed == 0:
-                logger.info("No historical Claude Code events to process")
+            if iteration >= max_iterations:
+                logger.warning(
+                    f"Hit max_iterations limit ({max_iterations}) while processing pending messages. "
+                    f"Processed {total_claude_events} Claude Code events, ACKed {total_acked} messages."
+                )
+
+            if total_claude_events > 0:
+                logger.info(
+                    f"Processed {total_claude_events} pending Claude Code events (ACKed {total_acked})"
+                )
         except Exception as e:
-            logger.warning(f"Error catching up historical events: {e}")
+            logger.warning(f"Error processing pending messages: {e}", exc_info=True)
 
     async def stop(self):
         """Stop monitoring."""
         self.running = False
+        if hasattr(self, '_executor'):
+            self._executor.shutdown(wait=True)
         logger.info("Claude Code session monitor stopped")
 
     async def _listen_redis_events(self):
         """
-        Listen to session_start/end events from Redis stream.
+        Listen to session_start/end events from Redis stream using consumer groups.
 
         Reads from telemetry:events stream, filters for Claude Code session events.
+        ACKs messages after successful processing.
         """
+        logger.info(
+            f"Starting Redis event listener for Claude Code sessions "
+            f"(consumer_group={self.consumer_group}, consumer_name={self.consumer_name})"
+        )
         try:
             while self.running:
                 try:
-                    # Read from stream (non-blocking, 1 second timeout)
-                    messages = self.redis_client.xread(
-                        {"telemetry:events": self.last_redis_id},
-                        count=100,
-                        block=1000  # 1 second block
+                    # Read from stream using consumer group (">" means new messages)
+                    # Run in executor to avoid blocking event loop
+                    loop = asyncio.get_event_loop()
+                    messages = await loop.run_in_executor(
+                        self._executor,
+                        lambda: self.redis_client.xreadgroup(
+                            groupname=self.consumer_group,
+                            consumername=self.consumer_name,
+                            streams={self.stream_name: ">"},  # ">" means new messages
+                            count=100,
+                            block=1000  # 1 second block
+                        )
                     )
 
                     if not messages:
@@ -146,8 +324,35 @@ class ClaudeCodeSessionMonitor:
                     # Process messages
                     for stream, msgs in messages:
                         for msg_id, fields in msgs:
-                            await self._process_redis_message(msg_id, fields)
-                            self.last_redis_id = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+                            # Decode message_id
+                            msg_id_str = msg_id.decode('utf-8') if isinstance(msg_id, bytes) else str(msg_id)
+                            
+                            try:
+                                # Process message
+                                success = await self._process_redis_message(msg_id_str, fields)
+                                
+                                if success:
+                                    # ACK successful processing (includes filtered messages)
+                                    try:
+                                        # Run ACK in executor to avoid blocking
+                                        await loop.run_in_executor(
+                                            self._executor,
+                                            lambda: self.redis_client.xack(
+                                                self.stream_name,
+                                                self.consumer_group,
+                                                msg_id_str
+                                            )
+                                        )
+                                    except Exception as e:
+                                        logger.error(f"Failed to ACK message {msg_id_str}: {e}")
+                                # If success is False, it's an error - don't ACK, let it retry via PEL
+                            except Exception as e:
+                                logger.error(
+                                    f"Error processing message {msg_id_str}: {e}",
+                                    exc_info=True
+                                )
+                                # Don't ACK on exception - let it retry via PEL
+                                # In production, you might want to implement retry limits and DLQ
 
                 except redis.exceptions.RedisError as e:
                     logger.error(f"Redis error in session monitor: {e}")
@@ -156,76 +361,98 @@ class ClaudeCodeSessionMonitor:
         except Exception as e:
             logger.error(f"Fatal error in session monitor: {e}")
 
-    async def _process_redis_message(self, msg_id, fields: dict):
+    async def _process_redis_message(self, msg_id: str, fields: dict) -> bool:
         """
         Process a Redis stream message.
 
         Filters for session_start/session_end events from Claude Code.
+        
+        Args:
+            msg_id: Redis message ID (string)
+            fields: Redis stream fields dictionary
+            
+        Returns:
+            True if message was processed (or should be ACKed), False if filtered out
         """
-        # Decode fields
-        event_type = self._decode_field(fields, 'event_type')
-        platform = self._decode_field(fields, 'platform')
+        try:
+            # Decode fields
+            event_type = self._decode_field(fields, 'event_type')
+            platform = self._decode_field(fields, 'platform')
 
-        # Only process Claude Code session events
-        if platform != 'claude_code':
-            return
+            # Only process Claude Code session events
+            if platform != 'claude_code':
+                return True  # Filtered out - ACK to prevent reprocessing
 
-        if event_type not in ('session_start', 'session_end'):
-            return
+            if event_type not in ('session_start', 'session_end'):
+                return True  # Filtered out - ACK to prevent reprocessing
 
-        # Parse payload
-        payload_str = self._decode_field(fields, 'payload')
-        payload = json.loads(payload_str) if payload_str else {}
+            # Parse payload
+            payload_str = self._decode_field(fields, 'payload')
+            payload = json.loads(payload_str) if payload_str else {}
 
-        metadata_str = self._decode_field(fields, 'metadata')
-        metadata = json.loads(metadata_str) if metadata_str else {}
+            metadata_str = self._decode_field(fields, 'metadata')
+            metadata = json.loads(metadata_str) if metadata_str else {}
 
-        session_id = payload.get('session_id') or self._decode_field(fields, 'session_id')
-        workspace_hash = metadata.get('workspace_hash')
-        workspace_path = metadata.get('workspace_path') or payload.get('workspace_path', '')
-        project_name = metadata.get('project_name') or derive_project_name(workspace_path)
+            # Extract session_id from fields (set by jsonl_monitor)
+            # jsonl_monitor sets both session_id and external_session_id
+            session_id = self._decode_field(fields, 'session_id') or self._decode_field(fields, 'external_session_id')
+            if not session_id:
+                logger.warning(f"Message {msg_id} missing session_id, skipping")
+                return True  # ACK to prevent reprocessing
 
-        if event_type == 'session_start':
-            session_info = {
-                "session_id": session_id,
-                "workspace_hash": workspace_hash,
-                "workspace_path": workspace_path,
-                "project_name": project_name,
-                "platform": "claude_code",
-                "started_at": asyncio.get_event_loop().time(),
-                "source": "hooks",
-            }
+            workspace_hash = metadata.get('workspace_hash')
+            workspace_path = metadata.get('workspace_path') or payload.get('workspace_path', '')
+            project_name = metadata.get('project_name') or derive_project_name(workspace_path)
 
-            # Add to in-memory dict (fast path)
-            with self._lock:
-                self.active_sessions[session_id] = session_info
-            
-            # Persist to database (durable)
-            if self.persistence:
-                await self.persistence.save_session_start(
-                    session_id=session_id,
-                    workspace_hash=workspace_hash or '',
-                    workspace_path=workspace_path,
-                    metadata={
-                        'source': metadata.get('source', 'hooks'),
-                        'project_name': project_name,
-                        **metadata
-                    }
-                )
-            
-            logger.info(f"Claude Code session started: {session_id} (workspace: {workspace_path})")
+            if event_type == 'session_start':
+                session_info = {
+                    "session_id": session_id,
+                    "workspace_hash": workspace_hash,
+                    "workspace_path": workspace_path,
+                    "project_name": project_name,
+                    "platform": "claude_code",
+                    "started_at": asyncio.get_event_loop().time(),
+                    "source": "hooks",
+                }
 
-        elif event_type == 'session_end':
-            # Update database first (ensure durability)
-            if self.persistence:
-                await self.persistence.save_session_end(session_id, end_reason='normal')
-            
-            # Then remove from memory
-            removed = self.remove_session(session_id)
-            if removed:
-                logger.info(f"Claude Code session ended: {session_id}")
-            else:
-                logger.debug(f"Session end for unknown session: {session_id}")
+                # Add to in-memory dict (fast path)
+                with self._lock:
+                    self.active_sessions[session_id] = session_info
+                
+                # Persist to database (durable)
+                if self.persistence:
+                    await self.persistence.save_session_start(
+                        session_id=session_id,
+                        workspace_hash=workspace_hash or '',
+                        workspace_path=workspace_path,
+                        metadata={
+                            'source': metadata.get('source', 'hooks'),
+                            'project_name': project_name,
+                            **metadata
+                        }
+                    )
+                
+                logger.info(f"Claude Code session started: {session_id} (workspace: {workspace_path})")
+                return True  # Successfully processed
+
+            elif event_type == 'session_end':
+                # Update database first (ensure durability)
+                if self.persistence:
+                    await self.persistence.save_session_end(session_id, end_reason='normal')
+                
+                # Then remove from memory
+                removed = self.remove_session(session_id)
+                if removed:
+                    logger.info(f"Claude Code session ended: {session_id}")
+                else:
+                    logger.debug(f"Session end for unknown session: {session_id}")
+                return True  # Successfully processed
+
+            return False  # Unknown event type
+        except Exception as e:
+            logger.error(f"Error processing Redis message {msg_id}: {e}", exc_info=True)
+            # Return False to prevent ACK, allowing retry via PEL
+            return False
 
     def _decode_field(self, fields: dict, key: str) -> Optional[str]:
         """

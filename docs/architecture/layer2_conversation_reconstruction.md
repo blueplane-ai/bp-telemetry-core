@@ -104,8 +104,11 @@ async def reconstruct_cursor_conversation(session_id: str):
     composer = find_composer_for_session(db_traces['composer.composerData'])
 
     # 5. Store in SQLite
+    # Note: For Cursor, session_id references cursor_sessions.id (internal UUID)
+    # The external_session_id from events maps to cursor_sessions.external_session_id
     await sqlite.store_conversation({
-        'session_id': session_id,
+        'session_id': internal_session_id,  # References cursor_sessions.id
+        'external_id': conversation_external_id,  # Conversation-specific external ID
         'platform': 'cursor',
         'timeline': conversation,
         'composer_metadata': composer,
@@ -225,9 +228,12 @@ async def reconstruct_claude_code_conversation(session_id: str):
     model_usage = extract_model_usage(transcript_data)
 
     # 6. Store in SQLite
+    # Note: For Claude Code, session_id is NULL (no session concept)
+    # The session_id from Claude Code becomes external_id in conversations table
     await sqlite.store_conversation({
-        'session_id': session_id,
-        'platform': 'claude',
+        'session_id': None,  # NULL for Claude Code (no session concept)
+        'external_id': session_id,  # Claude session/conversation ID becomes external_id
+        'platform': 'claude_code',
         'timeline': conversation,
         'model_usage': model_usage,
         'metrics': calculate_metrics(conversation, events)
@@ -361,11 +367,17 @@ class CrossPlatformAligner:
     Executed by dedicated alignment workers or on-demand.
     """
 
-    async def align_conversations(claude_session_id: str, cursor_session_id: str):
+    async def align_conversations(claude_external_id: str, cursor_session_id: str):
         """
         Align conversations from different platforms.
 
-        1. Load both conversations from SQLite
+        Note: 
+        - Claude Code: Use external_id (session/conversation ID) to look up conversation
+        - Cursor: Use session_id (internal UUID) or external_session_id to look up session, then conversations
+
+        1. Load both conversations from SQLite:
+           - Claude: SELECT * FROM conversations WHERE external_id = ? AND platform = 'claude_code'
+           - Cursor: SELECT c.* FROM conversations c JOIN cursor_sessions s ON c.session_id = s.id WHERE s.external_session_id = ?
         2. Find temporal correlations:
            - Match events within 5-second window
            - Calculate confidence based on time_diff
@@ -385,45 +397,53 @@ class CrossPlatformAligner:
 
 The reconstructed conversations are stored in SQLite (Layer 2) with the following schema:
 
+**Important**: See [SESSION_CONVERSATION_SCHEMA.md](../../SESSION_CONVERSATION_SCHEMA.md) for the complete schema design.
+
 ```sql
--- Conversations table
+-- Cursor Sessions Table (Cursor only - Claude Code has no session concept)
+CREATE TABLE cursor_sessions (
+    id TEXT PRIMARY KEY,
+    external_session_id TEXT NOT NULL UNIQUE,
+    workspace_hash TEXT NOT NULL,
+    workspace_name TEXT,
+    workspace_path TEXT,
+    started_at TIMESTAMP NOT NULL,
+    ended_at TIMESTAMP,
+    metadata TEXT DEFAULT '{}'
+);
+
+-- Conversations table (unified for both platforms)
 CREATE TABLE conversations (
     id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
+    session_id TEXT,  -- NULL for Claude Code, references cursor_sessions.id for Cursor
+    external_id TEXT NOT NULL,  -- Platform-specific external ID
     platform TEXT NOT NULL,
     workspace_hash TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    workspace_name TEXT,
+    started_at TIMESTAMP NOT NULL,
+    ended_at TIMESTAMP,
 
     -- Metrics
-    event_count INTEGER,
-    user_turns INTEGER,
-    tools_executed INTEGER,
+    interaction_count INTEGER DEFAULT 0,
     acceptance_rate REAL,
-    total_lines_added INTEGER,
-    total_lines_removed INTEGER,
+    total_tokens INTEGER DEFAULT 0,
+    total_changes INTEGER DEFAULT 0,
 
-    -- Model usage (JSON)
-    model_usage JSON,
+    -- JSON fields
+    context TEXT DEFAULT '{}',
+    metadata TEXT DEFAULT '{}',
+    tool_sequence TEXT DEFAULT '[]',
+    acceptance_decisions TEXT DEFAULT '[]',
 
-    -- Full timeline (JSON)
-    timeline JSON,
-
-    UNIQUE(session_id, platform)
+    FOREIGN KEY (session_id) REFERENCES cursor_sessions(id),
+    CHECK (
+        (platform = 'cursor' AND session_id IS NOT NULL) OR
+        (platform = 'claude_code' AND session_id IS NULL)
+    ),
+    UNIQUE(external_id, platform)
 );
 
--- Conversation turns table (normalized)
-CREATE TABLE conversation_turns (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id TEXT NOT NULL,
-    turn_index INTEGER NOT NULL,
-    turn_type TEXT NOT NULL,
-    timestamp TIMESTAMP NOT NULL,
-    metadata JSON,
-
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id),
-    INDEX idx_conversation_turns (conversation_id, turn_index)
-);
+-- Note: conversation_turns table not yet implemented
 
 -- Cross-platform alignments
 CREATE TABLE conversation_alignments (

@@ -24,6 +24,9 @@ from .fast_path.consumer import FastPathConsumer
 from .fast_path.cdc_publisher import CDCPublisher
 from .cursor.session_monitor import SessionMonitor
 from .cursor.database_monitor import CursorDatabaseMonitor
+from .cursor.markdown_monitor import CursorMarkdownMonitor
+from .cursor.session_timeout import CursorSessionTimeoutManager
+from .cursor.metrics import get_metrics
 from .claude_code.transcript_monitor import ClaudeCodeTranscriptMonitor
 from .claude_code.session_monitor import ClaudeCodeSessionMonitor
 from .claude_code.jsonl_monitor import ClaudeCodeJSONLMonitor
@@ -61,7 +64,9 @@ class TelemetryServer:
         self.cdc_publisher: Optional[CDCPublisher] = None
         self.consumer: Optional[FastPathConsumer] = None
         self.session_monitor: Optional[SessionMonitor] = None
+        self.cursor_timeout_manager: Optional[CursorSessionTimeoutManager] = None
         self.cursor_monitor: Optional[CursorDatabaseMonitor] = None
+        self.markdown_monitor: Optional[CursorMarkdownMonitor] = None
         self.claude_code_monitor: Optional[ClaudeCodeTranscriptMonitor] = None
         self.claude_session_monitor: Optional[ClaudeCodeSessionMonitor] = None
         self.claude_jsonl_monitor: Optional[ClaudeCodeJSONLMonitor] = None
@@ -78,8 +83,36 @@ class TelemetryServer:
         # Initialize database with optimal settings
         self.sqlite_client.initialize_database()
         
-        # Create schema
-        create_schema(self.sqlite_client)
+        # Check schema version and migrate if needed
+        from src.processing.database.schema import (
+            create_schema, get_schema_version, migrate_schema, 
+            SCHEMA_VERSION, detect_schema_version
+        )
+        
+        current_version = detect_schema_version(self.sqlite_client)
+        
+        if current_version is None:
+            # First time setup - create schema
+            logger.info("Creating database schema...")
+            create_schema(self.sqlite_client)
+            
+            # Set schema version
+            self.sqlite_client.execute(
+                "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)"
+            )
+            self.sqlite_client.execute(
+                "INSERT INTO schema_version (version) VALUES (?)",
+                (SCHEMA_VERSION,)
+            )
+            logger.info(f"Database schema created (version {SCHEMA_VERSION})")
+        elif current_version < SCHEMA_VERSION:
+            # Migration needed
+            logger.info(f"Migrating schema from version {current_version} to {SCHEMA_VERSION}")
+            migrate_schema(self.sqlite_client, current_version, SCHEMA_VERSION)
+        else:
+            # Ensure schema exists (for new tables)
+            create_schema(self.sqlite_client)
+            logger.info(f"Database schema is up to date (version {current_version})")
         
         # Create writer
         self.sqlite_writer = SQLiteBatchWriter(self.sqlite_client)
@@ -139,8 +172,9 @@ class TelemetryServer:
 
     def _initialize_cursor_monitor(self) -> None:
         """Initialize Cursor database monitor."""
-        # Check if cursor monitoring is enabled (default: True)
-        enabled = True  # TODO: Load from config
+        # Load cursor config
+        cursor_config = self.config.get_cursor_config("database_monitor")
+        enabled = cursor_config.get("enabled", True)
 
         if not enabled:
             logger.info("Cursor database monitoring is disabled")
@@ -148,20 +182,80 @@ class TelemetryServer:
 
         logger.info("Initializing Cursor database monitor")
 
-        # Create session monitor
-        self.session_monitor = SessionMonitor(self.redis_client)
+        # Create session monitor (with database persistence)
+        self.session_monitor = SessionMonitor(
+            redis_client=self.redis_client,
+            sqlite_client=self.sqlite_client
+        )
+
+        # Create timeout manager for abandoned sessions
+        self.cursor_timeout_manager = CursorSessionTimeoutManager(
+            session_monitor=self.session_monitor,
+            sqlite_client=self.sqlite_client,
+            timeout_hours=24,
+            cleanup_interval=3600.0
+        )
 
         # Create database monitor
         self.cursor_monitor = CursorDatabaseMonitor(
             redis_client=self.redis_client,
             session_monitor=self.session_monitor,
-            poll_interval=30.0,
-            sync_window_hours=24,
-            query_timeout=1.5,
-            max_retries=3,
+            poll_interval=cursor_config.get("poll_interval_seconds", 30.0),
+            sync_window_hours=cursor_config.get("sync_window_hours", 24),
+            query_timeout=cursor_config.get("query_timeout_seconds", 1.5),
+            max_retries=cursor_config.get("max_retries", 3),
         )
 
         logger.info("Cursor database monitor initialized")
+
+    def _initialize_markdown_monitor(self) -> None:
+        """Initialize Cursor Markdown History monitor."""
+        # Load cursor config
+        markdown_config = self.config.get_cursor_config("markdown_monitor")
+        duckdb_config = self.config.get_cursor_config("duckdb_sink")
+        
+        enabled = markdown_config.get("enabled", True)
+
+        if not enabled:
+            logger.info("Cursor Markdown History monitoring is disabled")
+            return
+
+        # Require session monitor to be initialized
+        if not self.session_monitor:
+            logger.warning("Session monitor not initialized, cannot start Markdown monitor")
+            return
+
+        logger.info("Initializing Cursor Markdown History monitor")
+
+        # Get output directory from config
+        output_dir = markdown_config.get("output_dir")
+        if output_dir:
+            output_dir = Path(output_dir)
+        
+        # Get DuckDB settings
+        enable_duckdb = duckdb_config.get("enabled", False)
+        duckdb_path = duckdb_config.get("database_path")
+        if duckdb_path:
+            duckdb_path = Path(duckdb_path)
+        
+        # Create markdown monitor
+        self.markdown_monitor = CursorMarkdownMonitor(
+            session_monitor=self.session_monitor,
+            output_dir=output_dir,
+            poll_interval=markdown_config.get("poll_interval_seconds", 120.0),
+            debounce_delay=markdown_config.get("debounce_delay_seconds", 10.0),
+            query_timeout=markdown_config.get("query_timeout_seconds", 1.5),
+            enable_duckdb=enable_duckdb,
+            duckdb_path=duckdb_path,
+        )
+
+        logger.info(
+            f"Cursor Markdown History monitor initialized "
+            f"(output_dir={output_dir or 'workspace/.history/'}, "
+            f"poll_interval={markdown_config.get('poll_interval_seconds', 120)}s, "
+            f"debounce={markdown_config.get('debounce_delay_seconds', 10)}s, "
+            f"duckdb_enabled={enable_duckdb})"
+        )
 
     def _initialize_claude_code_monitor(self) -> None:
         """Initialize Claude Code monitors (session, JSONL, transcript)."""
@@ -210,6 +304,19 @@ class TelemetryServer:
 
         logger.info("Claude Code monitors initialized")
 
+    async def _log_metrics_periodically(self):
+        """Log metrics periodically."""
+        import asyncio
+        while self.running:
+            await asyncio.sleep(300)  # Every 5 minutes
+            try:
+                metrics = get_metrics()
+                stats = metrics.get_stats()
+                if stats:
+                    logger.info(f"Session metrics: {stats}")
+            except Exception as e:
+                logger.debug(f"Error logging metrics: {e}")
+
     def start(self) -> None:
         """Start the server."""
         if self.running:
@@ -224,47 +331,111 @@ class TelemetryServer:
             self._initialize_redis()
             self._initialize_consumer()
             self._initialize_cursor_monitor()
+            self._initialize_markdown_monitor()
             self._initialize_claude_code_monitor()
 
             # Start monitors in background threads (if enabled)
-            if self.session_monitor and self.cursor_monitor:
+            if self.session_monitor:
                 def run_session_monitor():
                     import asyncio
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self.session_monitor.start())
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(self.session_monitor.start())
+                    except Exception as e:
+                        logger.error(f"Cursor session monitor thread crashed: {e}", exc_info=True)
                 
+                session_thread = threading.Thread(target=run_session_monitor, daemon=True)
+                session_thread.start()
+                self.monitor_threads.append(session_thread)
+                logger.info("Cursor session monitor started")
+            
+            if self.cursor_monitor:
                 def run_cursor_monitor():
                     import asyncio
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     loop.run_until_complete(self.cursor_monitor.start())
                 
-                session_thread = threading.Thread(target=run_session_monitor, daemon=True)
                 cursor_thread = threading.Thread(target=run_cursor_monitor, daemon=True)
-                session_thread.start()
                 cursor_thread.start()
-                self.monitor_threads.extend([session_thread, cursor_thread])
+                self.monitor_threads.append(cursor_thread)
+                logger.info("Cursor database monitor started")
+            
+            if self.cursor_timeout_manager:
+                def run_cursor_timeout_manager():
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.cursor_timeout_manager.start())
+                
+                cursor_timeout_thread = threading.Thread(target=run_cursor_timeout_manager, daemon=True)
+                cursor_timeout_thread.start()
+                self.monitor_threads.append(cursor_timeout_thread)
+                logger.info("Cursor session timeout manager started")
+
+            # Start metrics logging task (if Cursor monitoring enabled)
+            if self.session_monitor:
+                def run_metrics_logger():
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self._log_metrics_periodically())
+                
+                metrics_thread = threading.Thread(target=run_metrics_logger, daemon=True)
+                metrics_thread.start()
+                self.monitor_threads.append(metrics_thread)
+                logger.info("Session metrics logger started")
+
+            # Start markdown monitor (if enabled)
+            if self.markdown_monitor:
+                def run_markdown_monitor():
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.markdown_monitor.start())
+                
+                markdown_thread = threading.Thread(target=run_markdown_monitor, daemon=True)
+                markdown_thread.start()
+                self.monitor_threads.append(markdown_thread)
+                logger.info("Cursor Markdown History monitor started")
 
             # Start Claude Code monitors (if enabled)
             if self.claude_session_monitor and self.claude_jsonl_monitor:
                 def run_claude_session_monitor():
                     import asyncio
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self.claude_session_monitor.start())
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(self.claude_session_monitor.start())
+                    except Exception as e:
+                        logger.error(f"Claude Code session monitor thread crashed: {e}", exc_info=True)
 
                 def run_claude_jsonl_monitor():
                     import asyncio
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self.claude_jsonl_monitor.start())
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(self.claude_jsonl_monitor.start())
+                    except Exception as e:
+                        logger.error(f"Claude Code JSONL monitor thread crashed: {e}", exc_info=True)
                 
                 def run_claude_timeout_manager():
                     import asyncio
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self.claude_timeout_manager.start())
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(self.claude_timeout_manager.start())
+                    except Exception as e:
+                        logger.error(f"Claude Code timeout manager thread crashed: {e}", exc_info=True)
 
                 claude_session_thread = threading.Thread(target=run_claude_session_monitor, daemon=True)
                 claude_jsonl_thread = threading.Thread(target=run_claude_jsonl_monitor, daemon=True)
@@ -318,7 +489,23 @@ class TelemetryServer:
             return
 
         logger.info("Stopping server...")
+        
+        # Log final metrics before shutdown
+        try:
+            metrics = get_metrics()
+            stats = metrics.get_stats()
+            if stats:
+                logger.info(f"Final session metrics: {stats}")
+        except Exception as e:
+            logger.debug(f"Error logging final metrics: {e}")
         self.running = False
+
+        # Stop Cursor timeout manager
+        if self.cursor_timeout_manager:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.cursor_timeout_manager.stop())
 
         # Stop Claude Code monitors
         if self.claude_timeout_manager:
@@ -344,6 +531,12 @@ class TelemetryServer:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self.claude_code_monitor.stop())
+
+        if self.markdown_monitor:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.markdown_monitor.stop())
 
         # Stop Cursor monitors
         if self.cursor_monitor:
