@@ -338,7 +338,7 @@ bp-telemetry-core/
 │   ├── init_redis.py        # Initialize Redis streams
 │   ├── init_database.py     # Initialize SQLite database
 │   ├── start_server.py      # Start processing server
-│   ├── install_claude_code.py # Install Claude Code hooks
+│   ├── install_claude_hooks.py # Install Claude Code session hooks
 │   ├── test_end_to_end.py   # End-to-end test
 │   └── test_database_traces.py
 ├── docs/

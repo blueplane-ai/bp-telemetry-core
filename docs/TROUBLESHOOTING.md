@@ -386,7 +386,7 @@ python scripts/start_server.py
 For **Claude Code**:
 ```bash
 # Reinstall hooks to ensure latest version
-python scripts/install_claude_code.py
+python scripts/install_claude_hooks.py
 
 # Restart Claude Code
 ```
@@ -481,7 +481,7 @@ ls -la src/capture/cursor/extension/
 For **Claude Code hooks**:
 ```bash
 # Install with appropriate permissions
-python scripts/install_claude_code.py
+python scripts/install_claude_hooks.py
 
 # Or manually with sudo if needed:
 sudo mkdir -p ~/.claude/hooks/telemetry

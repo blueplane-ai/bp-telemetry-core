@@ -18,45 +18,52 @@ CURSOR_HOOKS_DIR="$HOME/.cursor/hooks"
 echo "Installing Blueplane Cursor Global Hooks..."
 echo ""
 
+# DEPRECATION NOTICE
+echo "========================================="
+echo "NOTICE: Cursor hooks are deprecated for trace capture"
+echo "========================================="
+echo "Cursor now uses the VSCode extension for all telemetry capture."
+echo "Hooks are no longer used for session tracking or trace capture."
+echo ""
+
 # Create hooks directory
 echo "Creating hooks directory: $CURSOR_HOOKS_DIR"
 mkdir -p "$CURSOR_HOOKS_DIR"
 
-# Note: We no longer install hook scripts since we only listen for extension
-# session_start and session_end events. The extension sends these events directly
-# to Redis, so hooks are not needed.
-echo "Skipping hook scripts (using extension events only)..."
+# Note: We no longer install hook scripts since we only use the extension
+# for session tracking and telemetry capture
+echo "Skipping hook scripts installation (deprecated - using extension events only)..."
 
-# Copy base module
-echo "Copying hook_base.py..."
-cp "$SCRIPT_DIR/hook_base.py" "$CURSOR_HOOKS_DIR/hook_base.py"
+# Copy base module (kept for compatibility but not used)
+echo "Copying hook_base.py (for compatibility)..."
+if [ -f "$SCRIPT_DIR/hook_base.py" ]; then
+    cp "$SCRIPT_DIR/hook_base.py" "$CURSOR_HOOKS_DIR/hook_base.py"
+fi
 
-# Copy shared modules
-echo "Copying shared modules..."
+# Copy shared modules (kept for compatibility but not used)
+echo "Copying shared modules (for compatibility)..."
 SHARED_DIR="$CURSOR_HOOKS_DIR/shared"
 mkdir -p "$SHARED_DIR"
-cp "$SCRIPT_DIR/../shared"/*.py "$SHARED_DIR/"
+if [ -d "$SCRIPT_DIR/../shared" ]; then
+    cp "$SCRIPT_DIR/../shared"/*.py "$SHARED_DIR/" 2>/dev/null || true
+fi
 
-# Copy capture __init__.py for version
-echo "Copying capture module..."
+# Copy capture __init__.py for version (kept for compatibility)
+echo "Copying capture module (for compatibility)..."
 CAPTURE_DIR="$CURSOR_HOOKS_DIR/capture"
 mkdir -p "$CAPTURE_DIR"
-cp "$SCRIPT_DIR/../__init__.py" "$CAPTURE_DIR/__init__.py"
+if [ -f "$SCRIPT_DIR/../__init__.py" ]; then
+    cp "$SCRIPT_DIR/../__init__.py" "$CAPTURE_DIR/__init__.py"
+fi
 
-# Copy session event sender
-echo "Copying session event sender..."
-cp "$SCRIPT_DIR/send_session_event.py" "$CURSOR_HOOKS_DIR/send_session_event.py"
-chmod +x "$CURSOR_HOOKS_DIR/send_session_event.py"
-
-# Note: We no longer merge hooks.json since we don't install any hooks.
-# The extension handles session_start and session_end events directly.
+# Note: We no longer install actual hook scripts or merge hooks.json
 echo "Skipping hooks.json merge (no hooks to register)..."
 
 echo ""
 echo "✅ Installation complete!"
 echo ""
-echo "The Cursor extension will send session_start and session_end events"
-echo "directly to Redis to track workspace sessions."
+echo "The Cursor extension will handle all telemetry capture."
+echo "No hooks are required for session tracking or trace capture."
 echo ""
 echo "Next steps:"
 echo "  1. Install and activate the Cursor extension"

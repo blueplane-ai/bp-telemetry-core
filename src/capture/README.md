@@ -117,8 +117,8 @@ redis-server
 # 3. Initialize Redis streams
 python scripts/init_redis.py
 
-# 4. Install Claude Code hooks
-python scripts/install_claude_code.py
+# 4. Install Claude Code session hooks
+python scripts/install_claude_hooks.py
 
 # 5. Start the processing server
 python scripts/start_server.py

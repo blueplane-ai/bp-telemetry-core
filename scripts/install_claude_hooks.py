@@ -49,13 +49,15 @@ def install_hooks(source_path: Path) -> bool:
 
         # Copy all Python hook files
         hook_files = [
+            # Session hooks are used to manage the session lifecycle
             "session_start.py",
             "session_end.py",
-            "user_prompt_submit.py",
-            "pre_tool_use.py",
-            "post_tool_use.py",
-            "pre_compact.py",
-            "stop.py",
+            # TODO: Additional hooks to capture more detailed telemetry or provide injection points. Disabled for now.
+            # "user_prompt_submit.py", 
+            # "pre_tool_use.py",
+            # "post_tool_use.py",
+            # "pre_compact.py",
+            # "stop.py",
         ]
 
         for hook_file in hook_files:
