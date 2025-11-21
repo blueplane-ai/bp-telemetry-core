@@ -317,11 +317,19 @@ bp-telemetry-core/
 │       ├── database/         # SQLite client and schema
 │       │   ├── sqlite_client.py
 │       │   ├── schema.py
-│       │   └── writer.py
-│       ├── fast_path/       # Fast path consumer
-│       │   ├── consumer.py
+│       │   └── writer.py    # Generic compression utilities
+│       ├── common/          # Shared processing utilities
 │       │   ├── batch_manager.py
 │       │   └── cdc_publisher.py
+│       ├── claude_code/     # Claude Code event processing
+│       │   ├── event_consumer.py
+│       │   ├── raw_traces_writer.py
+│       │   ├── jsonl_monitor.py
+│       │   └── session_monitor.py
+│       ├── cursor/          # Cursor event processing
+│       │   ├── event_consumer.py
+│       │   ├── raw_traces_writer.py
+│       │   └── database_monitor.py
 │       └── server.py        # Main processing server
 ├── config/
 │   ├── redis.yaml           # Redis configuration
