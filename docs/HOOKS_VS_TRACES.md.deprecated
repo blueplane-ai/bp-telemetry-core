@@ -1,21 +1,25 @@
-# Hooks vs Database Traces: Organization & Relationships
+# DEPRECATED - Hooks vs Database Traces: Organization & Relationships
+
+**⚠️ DEPRECATION NOTICE**: This document is deprecated. The current implementation focuses on database monitoring for Cursor telemetry capture, not hooks. Hooks capture is not currently part of the system.
 
 **Created**: November 11, 2025
 
 ---
 
-## Overview
+## Overview (DEPRECATED)
 
-Both **hooks** and **database traces** are stored in the same `raw_traces` table, but they capture different aspects of the AI coding workflow. They're **complementary** data sources that get correlated by `session_id` and `timestamp`.
+Both **hooks** and **database traces** are stored in the platform-specific raw traces tables (e.g., `cursor_raw_traces` for Cursor), but they capture different aspects of the AI coding workflow. They're **complementary** data sources that get correlated by `session_id` and `timestamp`.
 
 ---
 
-## 1. Unified Storage: `raw_traces` Table
+## 1. Platform-Specific Storage
 
-### **Schema**
+The system uses separate tables for each platform to optimize for platform-specific data structures:
+
+### **Cursor Raw Traces Table**
 
 ```sql
-CREATE TABLE raw_traces (
+CREATE TABLE cursor_raw_traces (
     -- Sequential ID
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
     ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -50,9 +54,9 @@ CREATE TABLE raw_traces (
 ### **Key Indexes**
 
 ```sql
-CREATE INDEX idx_session_time ON raw_traces(session_id, timestamp);
-CREATE INDEX idx_event_type_time ON raw_traces(event_type, timestamp);
-CREATE INDEX idx_timestamp ON raw_traces(timestamp DESC);
+CREATE INDEX idx_cursor_session_time ON cursor_raw_traces(external_session_id, timestamp);
+CREATE INDEX idx_cursor_event_type_time ON cursor_raw_traces(event_type, timestamp);
+CREATE INDEX idx_cursor_timestamp ON cursor_raw_traces(timestamp DESC);
 ```
 
 ---
@@ -239,71 +243,68 @@ sequence | timestamp           | event_type           | hook_type            | s
 ### **A. Full Session Timeline**
 
 ```sql
--- Get all events for a session (hooks + traces)
+-- Get all events for a Cursor session (hooks + traces)
 SELECT
     sequence,
     timestamp,
     event_type,
-    hook_type,
     model,
     tokens_used,
     CASE
         WHEN event_type = 'database_trace' THEN '📊 DB Trace'
         ELSE '🔗 Hook'
     END as source
-FROM raw_traces
-WHERE session_id = 'curs_1731320400_abc123'
+FROM cursor_raw_traces
+WHERE external_session_id = 'curs_1731320400_abc123'
 ORDER BY timestamp;
 ```
 
 ### **B. Compare Hook vs Trace for Same Generation**
 
 ```sql
--- Find hook event and its corresponding database trace
+-- Find hook event and its corresponding database trace (Cursor)
 SELECT
     r1.event_type as hook_event,
     r1.timestamp as hook_time,
-    json_extract(r1.event_data, '$.payload.response_text') as hook_response,
     r2.event_type as trace_event,
     r2.timestamp as trace_time,
-    json_extract(r2.event_data, '$.payload.response_text') as trace_response,
     (julianday(r2.timestamp) - julianday(r1.timestamp)) * 86400 as delay_seconds
-FROM raw_traces r1
-LEFT JOIN raw_traces r2
-    ON r1.session_id = r2.session_id
+FROM cursor_raw_traces r1
+LEFT JOIN cursor_raw_traces r2
+    ON r1.external_session_id = r2.external_session_id
     AND r2.event_type = 'database_trace'
     AND abs(julianday(r2.timestamp) - julianday(r1.timestamp)) * 86400 < 10
 WHERE r1.event_type = 'assistant_response'
-    AND r1.session_id = 'curs_1731320400_abc123'
+    AND r1.external_session_id = 'curs_1731320400_abc123'
 ORDER BY r1.timestamp;
 ```
 
 ### **C. Detect Missing Hooks (DB Has It, Hook Doesn't)**
 
 ```sql
--- Find generations captured by DB but not by hooks
+-- Find generations captured by DB but not by hooks (Cursor)
 -- (Indicates hook failure or race condition)
 SELECT
-    json_extract(event_data, '$.payload.generation_id') as generation_id,
+    generation_uuid,
     timestamp,
     'Missing hook event' as issue
-FROM raw_traces
+FROM cursor_raw_traces
 WHERE event_type = 'database_trace'
-    AND session_id = 'curs_1731320400_abc123'
-    AND json_extract(event_data, '$.payload.generation_id') NOT IN (
-        SELECT json_extract(event_data, '$.payload.generation_id')
-        FROM raw_traces
+    AND external_session_id = 'curs_1731320400_abc123'
+    AND generation_uuid NOT IN (
+        SELECT generation_uuid
+        FROM cursor_raw_traces
         WHERE event_type = 'assistant_response'
-            AND session_id = 'curs_1731320400_abc123'
+            AND external_session_id = 'curs_1731320400_abc123'
     );
 ```
 
 ### **D. Session Summary (Hooks + Traces)**
 
 ```sql
--- Aggregate metrics from both sources
+-- Aggregate metrics from both sources (Cursor)
 SELECT
-    session_id,
+    external_session_id,
     MIN(timestamp) as session_start,
     MAX(timestamp) as session_end,
 
@@ -320,9 +321,9 @@ SELECT
     SUM(tokens_used) as total_tokens,
     SUM(lines_added) as total_lines_added,
     SUM(lines_removed) as total_lines_removed
-FROM raw_traces
-WHERE session_id = 'curs_1731320400_abc123'
-GROUP BY session_id;
+FROM cursor_raw_traces
+WHERE external_session_id = 'curs_1731320400_abc123'
+GROUP BY external_session_id;
 ```
 
 ---
@@ -356,16 +357,17 @@ GROUP BY session_id;
 │              └──────────┬──────────┘                            │
 │                         │                                       │
 │                         ▼                                       │
-│              ┌────────────────────┐                            │
-│              │   raw_traces       │                            │
-│              │   (SQLite)         │                            │
-│              │                    │                            │
-│              │  • event_type      │ ◄─ Distinguishes hook/trace│
-│              │  • hook_type       │                            │
-│              │  • session_id      │ ◄─ Correlation key         │
-│              │  • timestamp       │ ◄─ Ordering key            │
-│              │  • event_data BLOB │ ◄─ Full content (compressed)│
-│              └──────────┬──────────┘                            │
+│              ┌──────────────────────┐                          │
+│              │ Platform-Specific    │                          │
+│              │ Raw Traces Tables    │                          │
+│              │ (cursor_raw_traces,  │                          │
+│              │  claude_raw_traces)  │                          │
+│              │                      │                          │
+│              │  • event_type        │ ◄─ Distinguishes traces  │
+│              │  • session_id        │ ◄─ Correlation key       │
+│              │  • timestamp         │ ◄─ Ordering key          │
+│              │  • event_data BLOB   │ ◄─ Full content (compressed)│
+│              └──────────┬────────────┘                          │
 │                         │                                       │
 │                         │ CDC Events                            │
 │                         ▼                                       │
@@ -393,11 +395,11 @@ GROUP BY session_id;
 
 ## 7. Key Takeaways
 
-### **✅ Single Storage, Dual Sources**
+### **✅ Platform-Specific Storage, Dual Sources**
 
-- Both hooks and traces go into `raw_traces` table
-- Distinguished by `event_type` and `hook_type` fields
-- No separate tables needed
+- Both hooks and traces go into platform-specific tables (cursor_raw_traces, claude_raw_traces)
+- Distinguished by `event_type` field
+- Separate tables per platform for optimized schema
 
 ### **✅ Correlation, Not Relations**
 
@@ -428,20 +430,20 @@ GROUP BY session_id;
 ## 8. Practical Example: One Prompt-Response Cycle
 
 ```
-10:30:45.000 | user_prompt         | beforeSubmitPrompt  | Hook captures prompt
-10:30:49.000 | assistant_response  | afterAgentResponse  | Hook captures response
-10:30:50.500 | database_trace      | DatabaseTrace       | DB trace confirms + adds metadata
-             |                     |                     |
-             └─────────────────────┴─────────────────────┤
-                                                          │
-                         All have same session_id:       │
-                         curs_1731320400_abc123          │
-                                                          │
-Query to reconstruct:                                     │
-SELECT * FROM raw_traces                                  │
-WHERE session_id = 'curs_1731320400_abc123'              │
-  AND timestamp BETWEEN '10:30:45' AND '10:30:51'        │
-ORDER BY timestamp;                                       │
+10:30:45.000 | user_prompt         | Hook captures prompt
+10:30:49.000 | assistant_response  | Hook captures response
+10:30:50.500 | database_trace      | DB trace confirms + adds metadata
+             |                     |
+             └─────────────────────┤
+                                   │
+   All have same external_session_id:
+   curs_1731320400_abc123          │
+                                   │
+Query to reconstruct:              │
+SELECT * FROM cursor_raw_traces    │
+WHERE external_session_id = 'curs_1731320400_abc123'
+  AND timestamp BETWEEN '10:30:45' AND '10:30:51'
+ORDER BY timestamp;
 ```
 
 **Result:**

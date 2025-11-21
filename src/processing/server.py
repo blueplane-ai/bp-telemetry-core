@@ -19,9 +19,9 @@ import redis
 
 from .database.sqlite_client import SQLiteClient
 from .database.schema import create_schema
-from .database.writer import SQLiteBatchWriter
-from .fast_path.consumer import FastPathConsumer
-from .fast_path.cdc_publisher import CDCPublisher
+from .claude_code.event_consumer import ClaudeEventConsumer
+from .common.cdc_publisher import CDCPublisher
+from .claude_code.raw_traces_writer import ClaudeRawTracesWriter
 from .cursor.session_monitor import SessionMonitor
 from .cursor.database_monitor import CursorDatabaseMonitor
 from .cursor.markdown_monitor import CursorMarkdownMonitor
@@ -65,7 +65,7 @@ class TelemetryServer:
         self.sqlite_writer: Optional[SQLiteBatchWriter] = None
         self.redis_client: Optional[redis.Redis] = None
         self.cdc_publisher: Optional[CDCPublisher] = None
-        self.consumer: Optional[FastPathConsumer] = None
+        self.consumer: Optional[ClaudeEventConsumer] = None
         self.session_monitor: Optional[SessionMonitor] = None
         self.cursor_timeout_manager: Optional[CursorSessionTimeoutManager] = None
         self.cursor_monitor: Optional[CursorDatabaseMonitor] = None
@@ -119,10 +119,10 @@ class TelemetryServer:
             # Ensure schema exists (for new tables)
             create_schema(self.sqlite_client)
             logger.info(f"Database schema is up to date (version {current_version})")
-        
-        # Create writer
-        self.sqlite_writer = SQLiteBatchWriter(self.sqlite_client)
-        
+
+        # Create Claude writer
+        self.claude_writer = ClaudeRawTracesWriter(self.sqlite_client)
+
         logger.info("Database initialized successfully")
 
     def _initialize_redis(self) -> None:
@@ -161,10 +161,10 @@ class TelemetryServer:
             max_length=cdc_config.max_length
         )
         
-        # Create consumer
-        self.consumer = FastPathConsumer(
+        # Create Claude Code event consumer
+        self.consumer = ClaudeEventConsumer(
             redis_client=self.redis_client,
-            sqlite_writer=self.sqlite_writer,
+            claude_writer=self.claude_writer,
             cdc_publisher=self.cdc_publisher,
             stream_name=stream_config.name,
             consumer_group=stream_config.consumer_group,
@@ -173,8 +173,8 @@ class TelemetryServer:
             batch_timeout=stream_config.block_ms / 1000.0,
             block_ms=stream_config.block_ms,
         )
-        
-        logger.info("Fast path consumer initialized")
+
+        logger.info("Claude Code event consumer initialized")
 
     def _initialize_cursor_monitor(self) -> None:
         """Initialize Cursor database monitor."""

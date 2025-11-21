@@ -1449,9 +1449,9 @@ class CursorDatabaseMonitor:
 **Add deduplication to consumer to prevent hook + monitor duplicates:**
 
 ```python
-# In src/processing/fast_path/consumer.py
+# In platform-specific event consumers (e.g., src/processing/cursor/event_consumer.py)
 
-class FastPathConsumer:
+class EventConsumer:
     def __init__(self, ...):
         # ... existing code ...
 

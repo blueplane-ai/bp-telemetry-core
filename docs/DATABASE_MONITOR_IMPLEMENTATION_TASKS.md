@@ -369,7 +369,7 @@ This document outlines the implementation tasks for moving database monitoring f
 ## Phase 6: Deduplication in Consumer
 
 ### 6.1 Consumer Deduplication
-- [ ] Update `FastPathConsumer` in `fast_path/consumer.py`:
+- [ ] Update `EventConsumer` in platform-specific directories (e.g., `cursor/event_consumer.py`):
   - [ ] Add `seen_generation_ids` set to `__init__()`
   - [ ] Add `dedup_ttl` dict to `__init__()`
   - [ ] Add `dedup_window_hours` config parameter

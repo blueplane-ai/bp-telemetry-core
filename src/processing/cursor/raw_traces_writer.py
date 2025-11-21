@@ -15,11 +15,11 @@ Handles batch writes to the cursor_raw_traces table with:
 import json
 import logging
 import uuid
-import zlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ..database.sqlite_client import SQLiteClient
+from ..database.writer import SQLiteBatchWriter
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ class CursorRawTracesWriter:
 
     def __init__(self, sqlite_client: SQLiteClient):
         self.sqlite_client = sqlite_client
+        self.batch_writer = SQLiteBatchWriter(sqlite_client)
 
     async def write_events(self, events: List[dict]) -> int:
         """
@@ -148,8 +149,7 @@ class CursorRawTracesWriter:
         has_unread_messages = self._safe_get_bool(full_data, "hasUnreadMessages")
 
         # Compress full event data
-        event_data_json = json.dumps(full_data)
-        event_data_compressed = zlib.compress(event_data_json.encode(), level=6)
+        event_data_compressed = self.batch_writer.compress_event(full_data)
 
         return (
             event_id,

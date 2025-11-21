@@ -20,59 +20,6 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 2
 
 
-def create_raw_traces_table(client: SQLiteClient) -> None:
-    """
-    Create raw_traces table for storing compressed event data.
-
-    Args:
-        client: SQLiteClient instance
-    """
-    sql = """
-    CREATE TABLE IF NOT EXISTS raw_traces (
-        -- Core identification
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-        -- Event metadata (indexed fields)
-        event_id TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        platform TEXT NOT NULL,
-        timestamp TIMESTAMP NOT NULL,
-
-        -- Context fields
-        workspace_hash TEXT,
-        project_name TEXT,
-        model TEXT,
-        tool_name TEXT,
-
-        -- Metrics (for fast filtering)
-        duration_ms INTEGER,
-        tokens_used INTEGER,
-        lines_added INTEGER,
-        lines_removed INTEGER,
-
-        -- Compressed payload (zlib level 6, achieves 7-10x compression)
-        event_data BLOB NOT NULL,
-
-        -- Generated columns for partitioning
-        event_date DATE GENERATED ALWAYS AS (DATE(timestamp)),
-        event_hour INTEGER GENERATED ALWAYS AS (CAST(strftime('%H', timestamp) AS INTEGER))
-    );
-    """
-    client.execute(sql)
-    
-    # Add project_name column for legacy databases
-    try:
-        client.execute("ALTER TABLE raw_traces ADD COLUMN project_name TEXT")
-        logger.info("Added project_name column to raw_traces table")
-    except Exception as e:
-        if "duplicate column name" not in str(e).lower():
-            logger.debug(f"Could not add project_name column (may already exist): {e}")
-    
-    logger.info("Created raw_traces table")
-
-
 def create_cursor_sessions_table(client: SQLiteClient) -> None:
     """
     Create cursor_sessions table for Cursor IDE window sessions.
@@ -515,14 +462,8 @@ def create_indexes(client: SQLiteClient) -> None:
         # Table doesn't exist yet, will be created with new schema
         pass
     
-    indexes = [
-        "CREATE INDEX IF NOT EXISTS idx_session_time ON raw_traces(session_id, timestamp);",
-        "CREATE INDEX IF NOT EXISTS idx_event_type_time ON raw_traces(event_type, timestamp);",
-        "CREATE INDEX IF NOT EXISTS idx_date_hour ON raw_traces(event_date, event_hour);",
-        "CREATE INDEX IF NOT EXISTS idx_timestamp ON raw_traces(timestamp DESC);",
-        "CREATE INDEX IF NOT EXISTS idx_project_name ON raw_traces(project_name);",
-    ]
-    
+    indexes = []
+
     # Only create conversation indexes if table has new schema
     if has_new_schema:
         indexes.extend([
@@ -563,7 +504,6 @@ def create_schema(client: SQLiteClient) -> None:
     logger.info("Creating database schema...")
 
     # Create tables (cursor_sessions must be created before conversations due to FK)
-    create_raw_traces_table(client)
     create_claude_raw_traces_table(client)
     create_claude_jsonl_offsets_table(client)
     create_cursor_raw_traces_table(client)

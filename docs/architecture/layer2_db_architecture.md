@@ -14,7 +14,7 @@ License-Filename: LICENSE
 
 ## Executive Summary
 
-This document specifies the database architecture for Blueplane's local implementation (Layers 1-3). Following the async pipeline pattern from `layer2_async_pipeline.md`, the architecture ensures sub-10ms raw trace ingestion while maintaining eventual consistency for derived metrics and conversation data. All databases run locally with no cloud dependencies. The system uses a simplified 2-database architecture: **SQLite** for all persistent data (raw traces and conversations in a single `telemetry.db` file) and **Redis** for real-time metrics and work queues. Layer 3 interfaces (CLI, MCP, Dashboard) access only processed data from SQLite (conversations) and Redis (metrics), never raw traces from the `raw_traces` table.
+This document specifies the database architecture for Blueplane's local implementation (Layers 1-3). Following the async pipeline pattern from `layer2_async_pipeline.md`, the architecture ensures sub-10ms raw trace ingestion while maintaining eventual consistency for derived metrics and conversation data. All databases run locally with no cloud dependencies. The system uses a simplified 2-database architecture: **SQLite** for all persistent data (raw traces and conversations in a single `telemetry.db` file) and **Redis** for real-time metrics and work queues. Layer 3 interfaces (CLI, MCP, Dashboard) access only processed data from SQLite (conversations) and Redis (metrics), never raw traces from the platform-specific raw traces tables (cursor_raw_traces and claude_raw_traces).
 
 ## Architecture Overview
 
@@ -30,7 +30,7 @@ This document specifies the database architecture for Blueplane's local implemen
 
 | Data Type | Database | Access Layer | Rationale |
 |-----------|----------|--------------|-----------|
-| **Raw Traces** | SQLite (`telemetry.db`) | Layer 2 Internal Only | zlib compression (7-10x), zero configuration, WAL mode for concurrency |
+| **Raw Traces** | SQLite (`telemetry.db`) | Layer 2 Internal Only | Platform-specific tables (cursor_raw_traces, claude_raw_traces), zlib compression (7-10x), zero configuration, WAL mode for concurrency |
 | **Conversations** | SQLite (`telemetry.db`) | Layer 2 & 3 | Same database as raw traces, ACID compliant, relational queries |
 | **Real-Time Metrics** | Redis TimeSeries | Layer 2 & 3 | Sub-millisecond latency, built-in aggregations, automatic expiry |
 | **Session Mappings** | SQLite (`telemetry.db`) | Layer 2 Only | Same database, lightweight key-value mappings |
@@ -79,7 +79,7 @@ graph TB
     STREAM --> WORKERS
     WORKERS --> SQLITE
     WORKERS --> REDIS
-    WORKERS -.->|Read raw_traces| SQLITE
+    WORKERS -.->|Read platform raw traces| SQLITE
 
     SQLITE --> CLI
     REDIS --> CLI
@@ -118,22 +118,40 @@ def initialize_database(db_path: str = '~/.blueplane/telemetry.db') -> None:
 
 #### Schema Design
 
+**Note**: The system uses platform-specific tables for raw traces:
+- `cursor_raw_traces` - For Cursor IDE events
+- `claude_raw_traces` - For Claude Code events
+
+See [Cursor Raw Traces Capture](../../CURSOR_RAW_TRACES_CAPTURE.md) for the complete Cursor schema.
+See [Claude Code JSONL Schema](../../CLAUDE_JSONL_SCHEMA.md) for the Claude Code schema.
+
+**Example platform-specific schema (Cursor)**:
+
 ```sql
--- Main raw traces table with zlib compression
-CREATE TABLE IF NOT EXISTS raw_traces (
+-- Cursor raw traces table with zlib compression
+CREATE TABLE IF NOT EXISTS cursor_raw_traces (
     -- Core identification
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
     ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     -- Event metadata (indexed fields)
     event_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
+    external_session_id TEXT,
     event_type TEXT NOT NULL,
-    platform TEXT NOT NULL,
     timestamp TIMESTAMP NOT NULL,
 
+    -- Source location metadata
+    storage_level TEXT NOT NULL,
+    workspace_hash TEXT NOT NULL,
+    database_table TEXT NOT NULL,
+    item_key TEXT NOT NULL,
+
+    -- Cursor-specific fields
+    generation_uuid TEXT,
+    composer_id TEXT,
+    bubble_id TEXT,
+
     -- Context fields
-    workspace_hash TEXT,
     model TEXT,
     tool_name TEXT,
 
@@ -152,10 +170,10 @@ CREATE TABLE IF NOT EXISTS raw_traces (
 );
 
 -- Indexes for common query patterns
-CREATE INDEX IF NOT EXISTS idx_session_time ON raw_traces(session_id, timestamp);
-CREATE INDEX IF NOT EXISTS idx_event_type_time ON raw_traces(event_type, timestamp);
-CREATE INDEX IF NOT EXISTS idx_date_hour ON raw_traces(event_date, event_hour);
-CREATE INDEX IF NOT EXISTS idx_timestamp ON raw_traces(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_cursor_session_time ON cursor_raw_traces(external_session_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_cursor_event_type_time ON cursor_raw_traces(event_type, timestamp);
+CREATE INDEX IF NOT EXISTS idx_cursor_date_hour ON cursor_raw_traces(event_date, event_hour);
+CREATE INDEX IF NOT EXISTS idx_cursor_timestamp ON cursor_raw_traces(timestamp DESC);
 
 -- Daily statistics table (pre-computed aggregations)
 CREATE TABLE IF NOT EXISTS trace_stats (
@@ -211,40 +229,40 @@ class SQLiteTraceStorage:
         - No explicit commit (WAL mode handles concurrency)
         """
 
-    def get_by_sequence(sequence: int) -> Dict:
+    def get_by_sequence(sequence: int, platform: str) -> Dict:
         """
         Read single event by sequence (used by slow path workers).
 
-        - SELECT event_data, indexed fields WHERE sequence = ?
+        - SELECT event_data, indexed fields FROM {platform}_raw_traces WHERE sequence = ?
         - Decompress event_data with zlib.decompress()
         - Parse JSON and merge with indexed fields
         - Return complete event dict
         """
 
-    def get_session_events(session_id: str, start_time, end_time) -> List[Dict]:
+    def get_session_events(session_id: str, platform: str, start_time, end_time) -> List[Dict]:
         """
         Query events for conversation reconstruction.
 
-        - SELECT WHERE session_id = ? AND timestamp BETWEEN ? AND ?
+        - SELECT FROM {platform}_raw_traces WHERE session_id = ? AND timestamp BETWEEN ? AND ?
         - ORDER BY timestamp ASC
         - Decompress and parse each event_data
         - Return list of event dicts
         """
 
-    def calculate_session_metrics(session_id: str) -> Dict:
+    def calculate_session_metrics(session_id: str, platform: str) -> Dict:
         """
         Calculate aggregated metrics for session.
 
-        - Query raw_traces for session_id
+        - Query {platform}_raw_traces for session_id
         - Aggregate: SUM(tokens_used), COUNT(*), SUM(duration_ms), etc.
         - Return metrics dict (no decompression needed for aggregates)
         """
 
-    def vacuum_old_traces(days_to_keep: int = 90) -> None:
+    def vacuum_old_traces(platform: str, days_to_keep: int = 90) -> None:
         """
         Delete old traces and reclaim space.
 
-        - DELETE FROM raw_traces WHERE event_date < (today - days_to_keep)
+        - DELETE FROM {platform}_raw_traces WHERE event_date < (today - days_to_keep)
         - Execute VACUUM to reclaim disk space
         - Update trace_stats to remove old dates
         """
@@ -516,7 +534,8 @@ class CDCWorkQueue:
 ### Fast Path Integration
 
 ```python
-# fast_path/integration.py (pseudocode)
+# Platform-specific event consumers (claude_code/event_consumer.py, cursor/event_consumer.py)
+# Pseudocode showing the integration pattern:
 
 class FastPathIntegration:
     """Integrates databases with fast path consumer. Zero reads, pure writes."""
@@ -585,7 +604,7 @@ class MetricsWorker(SlowPathWorker):
         """
         Process event to calculate metrics.
 
-        - Read full_event from sqlite.get_by_sequence(sequence)
+        - Read full_event from sqlite.get_by_sequence(sequence, platform)
         - Decompress event_data to get complete payload
         - Switch on event_type:
             - 'tool_use': Record latency to redis_metrics
@@ -601,7 +620,7 @@ class ConversationWorker(SlowPathWorker):
         """
         Update conversation from event.
 
-        - Read full_event from sqlite.get_by_sequence(sequence)
+        - Read full_event from sqlite.get_by_sequence(sequence, platform)
         - Decompress event_data to get complete payload
         - Get or create conversation in SQLite conversations table
         - Switch on event_type:
@@ -684,7 +703,7 @@ class MCPDatabaseAccess:
 | SQLite conversation fetch (no decompress) | 2ms | 10ms | 20ms |
 | Redis metric range query | 1ms | 5ms | 10ms |
 
-**Note**: Read operations on `raw_traces` table include zlib decompression overhead. Conversation queries access uncompressed structured data.
+**Note**: Read operations on platform-specific raw traces tables (cursor_raw_traces, claude_raw_traces) include zlib decompression overhead. Conversation queries access uncompressed structured data.
 
 ### Storage Requirements
 
@@ -715,7 +734,7 @@ class DatabaseHealthMonitor:
         Returns dict with health status for:
         - sqlite:
             - file_size_mb (telemetry.db)
-            - raw_trace_count, conversation_count
+            - cursor_raw_trace_count, claude_raw_trace_count, conversation_count
             - oldest_trace_date, newest_trace_date
             - wal_size_mb, integrity_check
         - redis:
@@ -738,7 +757,7 @@ class MaintenanceTasks:
         """
         Run daily maintenance.
 
-        - Delete old raw traces from SQLite (days_to_keep=90)
+        - Delete old raw traces from SQLite platform tables (days_to_keep=90)
         - Checkpoint WAL: PRAGMA wal_checkpoint(TRUNCATE)
         - XTRIM Redis streams (maxlen=100000)
         - Update trace_stats table with daily aggregations
@@ -769,10 +788,11 @@ This simplified 2-database local architecture provides:
 8. **Zero configuration** - Embedded databases with automatic setup
 
 **Key Architecture Benefits**:
-- **Single Database File**: `telemetry.db` contains both raw traces and conversations
+- **Single Database File**: `telemetry.db` contains both raw traces (platform-specific tables) and conversations
+- **Platform-Specific Storage**: Separate tables (cursor_raw_traces, claude_raw_traces) optimize for platform-specific data structures
 - **At-Least-Once Delivery**: Redis Streams PEL ensures no message loss
 - **Concurrent Access**: SQLite WAL mode allows simultaneous reads and writes
 - **Automatic Compression**: zlib level 6 achieves 7-10x space savings transparently
 - **Simple Backups**: Copy `telemetry.db` file for complete backup
 
-The architecture follows the async pipeline pattern with a simplified technology stack (Redis Streams + SQLite only), ensuring high performance while maintaining data quality and enabling rich analytics capabilities. Raw event data in the `raw_traces` table remains internal to Layer 2, with Layer 3 interfaces consuming only enriched, processed data from SQLite conversations and Redis metrics.
+The architecture follows the async pipeline pattern with a simplified technology stack (Redis Streams + SQLite only), ensuring high performance while maintaining data quality and enabling rich analytics capabilities. Raw event data in the platform-specific raw traces tables (cursor_raw_traces and claude_raw_traces) remains internal to Layer 2, with Layer 3 interfaces consuming only enriched, processed data from SQLite conversations and Redis metrics.

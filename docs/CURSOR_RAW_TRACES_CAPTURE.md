@@ -1588,9 +1588,9 @@ async def _monitoring_loop(self):
 | Redis Streams | `telemetry:events` | Message queue with at-least-once delivery | Add ACK support (XACK) |
 | Consumer Groups | `processors` group | Event processing with PEL support | Add proper ACK handling |
 | XREADGROUP/XACK | Redis native | Reliable message consumption | Implement in consumers |
-| Fast Path Consumer | `src/processing/fast_path/consumer.py` | Batch processing | Add ACK after successful writes |
+| Event Consumer | `src/processing/cursor/event_consumer.py` | Batch processing | Add ACK after successful writes |
 | Session Monitor | `src/processing/cursor/session_monitor.py` | Session tracking | Add callbacks for on_session_start/end |
-| CDC Publisher | `src/processing/cdc_publisher.py` | Change data capture | None |
+| CDC Publisher | `src/processing/common/cdc_publisher.py` | Change data capture | None |
 | SQLite Writer | `src/processing/database/writer.py` | Batch writes | Add cursor_raw_traces support |
 | zlib Compression | Level 6 | Event data compression | None |
 

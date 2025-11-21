@@ -103,9 +103,10 @@ graph TB
 **Non-blocking Message Consumption with Zero Reads**:
 
 ```python
-# server/fast_path/consumer.py (pseudocode)
+# Platform-specific event consumers (e.g., claude_code/event_consumer.py)
+# Pseudocode:
 
-class FastPathConsumer:
+class EventConsumer:
     """
     High-throughput consumer that writes raw events with minimal blocking.
     Target: <10ms per batch at P95 (includes zlib compression overhead).

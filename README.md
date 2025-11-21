@@ -145,8 +145,9 @@ from src.processing.database.sqlite_client import SQLiteClient
 from pathlib import Path
 client = SQLiteClient(str(Path.home() / '.blueplane' / 'telemetry.db'))
 with client.get_connection() as conn:
-    cursor = conn.execute('SELECT COUNT(*) FROM raw_traces')
-    print(f'Total events in database: {cursor.fetchone()[0]}')
+    # Check Cursor events
+    cursor = conn.execute('SELECT COUNT(*) FROM cursor_raw_traces')
+    print(f'Total Cursor events in database: {cursor.fetchone()[0]}')
 "
 
 # Run end-to-end test
@@ -316,11 +317,19 @@ bp-telemetry-core/
 │       ├── database/         # SQLite client and schema
 │       │   ├── sqlite_client.py
 │       │   ├── schema.py
-│       │   └── writer.py
-│       ├── fast_path/       # Fast path consumer
-│       │   ├── consumer.py
+│       │   └── writer.py    # Generic compression utilities
+│       ├── common/          # Shared processing utilities
 │       │   ├── batch_manager.py
 │       │   └── cdc_publisher.py
+│       ├── claude_code/     # Claude Code event processing
+│       │   ├── event_consumer.py
+│       │   ├── raw_traces_writer.py
+│       │   ├── jsonl_monitor.py
+│       │   └── session_monitor.py
+│       ├── cursor/          # Cursor event processing
+│       │   ├── event_consumer.py
+│       │   ├── raw_traces_writer.py
+│       │   └── database_monitor.py
 │       └── server.py        # Main processing server
 ├── config/
 │   ├── redis.yaml           # Redis configuration

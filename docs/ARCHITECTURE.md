@@ -39,7 +39,6 @@ The system is organized into three distinct layers:
 ```mermaid
 graph TB
     subgraph "Layer 1: Capture"
-        HOOKS[IDE Hooks]
         EXT[Extension<br/>Session Management]
         TRANSCRIPT[Transcript Monitor]
     end
@@ -59,7 +58,6 @@ graph TB
         DASH[Web Dashboard]
     end
 
-    HOOKS --> MQ
     EXT --> MQ
     TRANSCRIPT --> MQ
     DBMON --> MQ
@@ -90,26 +88,7 @@ Layer 1 is responsible for **capturing telemetry events** from AI coding assista
 
 ### Components
 
-#### 1.1 IDE Hooks
-
-Platform-specific hooks that capture events as they happen:
-
-**Claude Code Hooks:**
-
-- `SessionStart`: Session initialization
-- `UserPromptSubmit`: User input
-- `PreToolUse` / `PostToolUse`: Tool execution
-- `PreCompact`: Context window management
-- `Stop`: Session termination
-
-**Cursor Hooks:**
-
-- `BeforeSubmitPrompt`: User prompt submission
-- `AfterAgentResponse`: AI response
-- `BeforeMCPExecution` / `AfterMCPExecution`: Tool calls
-- `AfterFileEdit`: File modifications
-
-#### 1.2 Database Monitor
+#### 1.1 Database Monitor
 
 For platforms like Cursor that store data in SQLite:
 
@@ -119,13 +98,13 @@ For platforms like Cursor that store data in SQLite:
 - Converts database data to telemetry events
 - Note: Database monitoring runs in Layer 2 (processing server), not Layer 1 (extension)
 
-#### 1.3 Transcript Monitor
+#### 1.2 Transcript Monitor
 
 For Claude Code transcript files:
 
 - Monitors transcript JSONL files
 - Extracts conversation history, model usage, token counts
-- Provides rich context not available in hooks alone
+- Provides rich context for Claude Code sessions
 
 ### Event Format
 
@@ -252,7 +231,7 @@ graph LR
 
 ## Layer 3: Interfaces
 
-Layer 3 provides **multiple interfaces** for accessing telemetry data. Importantly, Layer 3 only accesses **processed data** from SQLite (conversations) and Redis (metrics), never raw traces from SQLite's `raw_traces` table.
+Layer 3 provides **multiple interfaces** for accessing telemetry data. Layer 3 primarily accesses **processed data** from SQLite (conversations) and Redis (metrics).
 
 ### 3.1 CLI Interface
 
@@ -364,19 +343,18 @@ sequenceDiagram
 
 ### Data Isolation
 
-**Important:** Raw traces in SQLite's `raw_traces` table are **Layer 2 internal only**:
+**Important:** Raw traces in SQLite's platform-specific raw traces tables:
 
-- ✅ Layer 2 fast path **writes** to SQLite `raw_traces` table
-- ✅ Layer 2 slow path **reads** from `raw_traces` for enrichment
-- ❌ Layer 3 interfaces **never access** `raw_traces` table
-- ✅ Layer 3 accesses only **processed data** (SQLite conversations + Redis metrics)
+- ✅ Layer 2 fast path **writes** to platform-specific tables (cursor_raw_traces, claude_raw_traces)
+- ✅ Layer 2 slow path **reads** from these tables for enrichment
+- ✅ Layer 3 primarily accesses **processed data** (SQLite conversations + Redis metrics)
 
-This ensures:
+This design provides:
 
-- Privacy: Raw events stay internal to processing layer
-- Performance: Layer 3 doesn't slow down ingestion
-- Simplicity: Clean API boundaries
-- Single database: All data in one file with table-level access control
+- Privacy: Raw events primarily internal to processing layer
+- Performance: Optimized access patterns for each layer
+- Simplicity: Clear API boundaries
+- Single database: All data in one file
 
 ## Database Architecture
 
@@ -384,10 +362,10 @@ This ensures:
 
 | Database   | Purpose                      | Access       | Rationale                                    |
 | ---------- | ---------------------------- | ------------ | -------------------------------------------- |
-| **SQLite** | Raw traces + Conversations   | Layer 2 & 3* | Embedded, ACID, single file, zlib compression |
+| **SQLite** | Platform-specific raw traces + Conversations | Layer 2 & 3* | Embedded, ACID, single file, zlib compression, separate tables per platform |
 | **Redis**  | Message queue + Real-time metrics | Layer 2 & 3  | Streams for MQ, TimeSeries for metrics, CDC  |
 
-_* Layer 3 only accesses conversation tables, not raw_traces table_
+_* Layer 3 only accesses conversation tables, not platform-specific raw traces tables (cursor_raw_traces, claude_raw_traces)_
 
 ### SQLite: Raw Trace Storage (Layer 2 Internal)
 
@@ -400,19 +378,30 @@ _* Layer 3 only accesses conversation tables, not raw_traces table_
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 
-CREATE TABLE raw_traces (
+-- Platform-specific raw traces tables
+-- Example: Cursor raw traces
+CREATE TABLE cursor_raw_traces (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
     ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     -- Event identification
     event_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
+    external_session_id TEXT,
     event_type TEXT NOT NULL,
-    platform TEXT NOT NULL,
     timestamp TIMESTAMP NOT NULL,
 
+    -- Source location metadata
+    storage_level TEXT NOT NULL,
+    workspace_hash TEXT NOT NULL,
+    database_table TEXT NOT NULL,
+    item_key TEXT NOT NULL,
+
+    -- Cursor-specific fields
+    generation_uuid TEXT,
+    composer_id TEXT,
+    bubble_id TEXT,
+
     -- Context (indexed for fast filtering)
-    workspace_hash TEXT,
     model TEXT,
     tool_name TEXT,
 
@@ -430,9 +419,12 @@ CREATE TABLE raw_traces (
     event_hour INTEGER GENERATED ALWAYS AS (CAST(strftime('%H', timestamp) AS INTEGER))
 );
 
-CREATE INDEX idx_raw_session_time ON raw_traces(session_id, timestamp);
-CREATE INDEX idx_raw_event_type ON raw_traces(event_type, timestamp);
-CREATE INDEX idx_raw_date_hour ON raw_traces(event_date, event_hour);
+CREATE INDEX idx_cursor_session_time ON cursor_raw_traces(external_session_id, timestamp);
+CREATE INDEX idx_cursor_event_type ON cursor_raw_traces(event_type, timestamp);
+CREATE INDEX idx_cursor_date_hour ON cursor_raw_traces(event_date, event_hour);
+
+-- Similar table exists for Claude Code: claude_raw_traces
+-- See docs/CLAUDE_JSONL_SCHEMA.md for Claude Code schema
 ```
 
 **Note**: Cursor's database (`state.vscdb`) uses a different schema with `ItemTable` key-value pairs. The database monitor reads `aiService.generations` and `aiService.prompts` as JSON arrays from `ItemTable`, not as SQL tables.
