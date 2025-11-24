@@ -12,7 +12,7 @@
 import * as vscode from "vscode";
 import { SessionManager } from "./sessionManager";
 import { QueueWriter } from "./queueWriter";
-import { ExtensionConfig } from "./types";
+import { ExtensionConfig, loadExtensionConfig } from "./config";
 
 let sessionManager: SessionManager | undefined;
 let queueWriter: QueueWriter | undefined;
@@ -35,8 +35,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Initialize components
     try {
-      queueWriter = new QueueWriter(config.redisHost, config.redisPort);
-      sessionManager = new SessionManager(context, queueWriter);
+      queueWriter = new QueueWriter(config);
+      sessionManager = new SessionManager(context, config, queueWriter);
     } catch (error) {
       console.error("Failed to initialize Blueplane components:", error);
       vscode.window.showErrorMessage(
@@ -201,14 +201,32 @@ export async function deactivate() {
 }
 
 /**
- * Load configuration from VSCode settings
+ * Load configuration from config.yaml and VSCode settings.
+ * VSCode settings override config.yaml values.
  */
 function loadConfiguration(): ExtensionConfig {
-  const config = vscode.workspace.getConfiguration("blueplane");
+  // Load from config.yaml first
+  const baseConfig = loadExtensionConfig();
+
+  // VSCode settings can override specific values
+  const vsConfig = vscode.workspace.getConfiguration("blueplane");
 
   return {
-    enabled: config.get<boolean>("enabled", true),
-    redisHost: config.get<string>("redisHost", "localhost"),
-    redisPort: config.get<number>("redisPort", 6379),
+    // Enabled is primarily controlled by VSCode setting
+    enabled: vsConfig.get<boolean>("enabled", baseConfig.enabled),
+
+    redis: {
+      host: vsConfig.get<string>("redisHost", baseConfig.redis.host),
+      port: vsConfig.get<number>("redisPort", baseConfig.redis.port),
+    },
+
+    // Other settings use config.yaml values but can be overridden
+    connectTimeout: vsConfig.get<number>("connectTimeout", baseConfig.connectTimeout),
+    maxReconnectAttempts: vsConfig.get<number>("maxReconnectAttempts", baseConfig.maxReconnectAttempts),
+    reconnectBackoffBase: vsConfig.get<number>("reconnectBackoffBase", baseConfig.reconnectBackoffBase),
+    reconnectBackoffMax: vsConfig.get<number>("reconnectBackoffMax", baseConfig.reconnectBackoffMax),
+    streamTrimThreshold: vsConfig.get<number>("streamTrimThreshold", baseConfig.streamTrimThreshold),
+    sessionDirectory: vsConfig.get<string>("sessionDirectory", baseConfig.sessionDirectory),
+    hashTruncateLength: vsConfig.get<number>("hashTruncateLength", baseConfig.hashTruncateLength),
   };
 }

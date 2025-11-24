@@ -10,7 +10,7 @@ The Workspace Markdown History pipeline monitors Cursor workspace databases and 
 
 - **M1: Markdown Generation**: Reads from Cursor's ItemTable and generates formatted Markdown
 - **M2: Background Monitoring**: Integrates with TelemetryServer, monitors workspace databases
-- **M3: Configuration**: Full configuration support via `config/cursor.yaml`
+- **M3: Configuration**: Full configuration support via `config.yaml`
 - **M4: DuckDB Sink**: Scaffolded analytics database (feature-flagged, disabled by default)
 
 ## Architecture
@@ -18,11 +18,13 @@ The Workspace Markdown History pipeline monitors Cursor workspace databases and 
 ### Components
 
 1. **CursorMarkdownWriter** (`src/processing/cursor/markdown_writer.py`)
+
    - Formats ItemTable data into Markdown
    - Handles 8 different key types with specialized formatting
    - Writes to `<workspace>/.history/{hash}_{timestamp}.md`
 
 2. **CursorMarkdownMonitor** (`src/processing/cursor/markdown_monitor.py`)
+
    - Polls workspace databases every 2 minutes
    - Detects changes using SHA256 hash
    - Debounces writes (configurable delay)
@@ -55,14 +57,14 @@ Edit `config/cursor.yaml`:
 cursor:
   markdown_monitor:
     enabled: true
-    output_dir: null  # null = workspace/.history/
-    poll_interval_seconds: 120  # 2 minutes
-    debounce_delay_seconds: 10  # Normal: 10s, Dev: 2s
+    output_dir: null # null = workspace/.history/
+    poll_interval_seconds: 120 # 2 minutes
+    debounce_delay_seconds: 10 # Normal: 10s, Dev: 2s
     query_timeout_seconds: 1.5
-    
+
   duckdb_sink:
-    enabled: false  # Feature flag
-    database_path: null  # null = ~/.blueplane/cursor_history.duckdb
+    enabled: false # Feature flag
+    database_path: null # null = ~/.blueplane/cursor_history.duckdb
 ```
 
 ## Monitored Keys
@@ -146,6 +148,7 @@ python test_duckdb_writer.py
 ### Monitor Not Starting
 
 Check logs for initialization errors:
+
 - Ensure Redis is running
 - Verify cursor.yaml exists and is valid
 - Check session_monitor is initialized

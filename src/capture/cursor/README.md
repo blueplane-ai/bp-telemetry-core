@@ -10,7 +10,7 @@ Layer 1 telemetry capture system for Cursor IDE using VSCode extension and datab
 
 Cursor telemetry is captured through two mechanisms:
 
-- **Extension Events**: VSCode extension captures IDE events directly for session management
+- **Extension Events**: VSCode extension manages sessions and sends session lifecycle events (start/end)
 - **Database Monitoring**: Python processing server monitors Cursor's SQLite database for AI generations and traces
 - **Workspace-Specific Sessions**: Each workspace gets its own session with unique session ID
 
@@ -24,15 +24,10 @@ Cursor telemetry is captured through two mechanisms:
            │
            ├─ Extension activated
            │  └─> Sends session_start event (workspace_hash, PID)
-           │  └─> Captures IDE events (file edits, commands, etc.)
            │
            ├─ User interacts with AI
-           │  └─> Database monitor detects changes in state.vscdb
+           │  └─> Python database monitor detects changes in state.vscdb
            │      └─> Sends AI generation events (prompts, responses, tool usage)
-           │
-           ├─ User edits file
-           │  └─> Extension captures event
-           │      └─> Sends file_edit event (session_id, workspace_hash, PID)
            │
            └─ Extension deactivated
               └─> Sends session_end event
@@ -162,8 +157,6 @@ Same format, but `event_type: "session_end"`.
 The extension captures:
 
 1. **Session lifecycle** - Session start/end with workspace context
-2. **IDE events** - File edits, commands, user actions
-3. **Status updates** - Extension status, errors, diagnostics
 
 ### Database Monitoring Events
 
@@ -174,34 +167,12 @@ The Python processing server monitors Cursor's `state.vscdb` database and captur
 3. **Tool usage** - MCP tool executions, file operations
 4. **Conversation traces** - Full conversation history
 
-### Event Format
-
-```json
-{
-  "version": "0.1.0",
-  "event_type": "file_edit",
-  "timestamp": "2025-11-11T10:30:00.000Z",
-  "payload": {
-    "file_extension": "py",
-    "operation": "edit"
-  },
-  "metadata": {
-    "session_id": "curs_1731283200000_abc123",
-    "pid": 12345,
-    "workspace_hash": "a1b2c3d4e5f6g7h8",
-    "platform": "cursor"
-  }
-}
-```
-
 ## Event Flow
 
 ```
 Extension Start → session_start event → Redis
     ↓
-User Action → Extension captures → Redis
-    ↓
-Database Monitor detects AI activity → Sends traces → Redis
+Python Database Monitor detects AI activity → Sends traces → Redis
     ↓
 Extension Stop → session_end event → Redis
 ```

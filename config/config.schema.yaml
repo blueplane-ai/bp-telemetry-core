@@ -1,0 +1,517 @@
+# Copyright © 2025 Sierra Labs LLC
+# SPDX-License-Identifier: AGPL-3.0-only
+# License-Filename: LICENSE
+
+# =============================================================================
+# Blueplane Telemetry Core - Unified Configuration Schema
+# =============================================================================
+# This file documents the complete configuration schema for bp-telemetry-core.
+# It serves as both documentation and validation reference for config.yaml.
+#
+# Used by:
+#   - Python: src/capture/shared/config.py and all processing modules
+#   - TypeScript: src/capture/cursor/extension (VSCode extension)
+#   - Scripts: Installation and monitoring scripts
+#
+# Configuration Hierarchy:
+#   1. config.yaml (this schema) - Default configuration
+#   2. ~/.blueplane/config.yaml - User overrides
+# =============================================================================
+
+# =============================================================================
+# PATHS - All file and directory paths
+# =============================================================================
+paths:
+  # Blueplane data directory (base for all bp data)
+  blueplane_home:
+    type: string
+    default: "~/.blueplane"
+    description: "Base directory for all Blueplane data"
+
+  # Blueplane database paths
+  database:
+    telemetry_db:
+      type: string
+      default: "${paths.blueplane_home}/telemetry.db"
+      description: "Main SQLite telemetry database"
+
+    cursor_history_db:
+      type: string
+      default: "${paths.blueplane_home}/cursor_history.duckdb"
+      description: "DuckDB sink for Cursor history (optional)"
+
+    event_buffer_db:
+      type: string
+      default: "${paths.blueplane_home}/event_buffer.db"
+      description: "SQLite event buffer for offline queueing"
+
+    workspace_cache:
+      type: string
+      default: "${paths.blueplane_home}/workspace_db_cache.json"
+      description: "Workspace-to-database mapping cache"
+
+  # Cursor session tracking
+  cursor_sessions_dir:
+    type: string
+    default: "${paths.blueplane_home}/cursor-session"
+    description: "Directory for Cursor workspace session files"
+
+  # Claude Code paths
+  claude:
+    projects_base:
+      type: string
+      default: "~/.claude/projects"
+      description: "Base directory for Claude Code project files and JSONL transcripts"
+
+    hooks_dir:
+      type: string
+      default: "~/.claude/hooks/telemetry"
+      description: "Directory for Claude Code telemetry hooks"
+
+    settings_file:
+      type: string
+      default: "~/.claude/settings.json"
+      description: "Claude Code settings file"
+
+  # Cursor IDE paths (defaults are for macOS)
+  cursor:
+    workspace_storage:
+      type: string
+      default: "~/Library/Application Support/Cursor/User/workspaceStorage"
+      description: "Cursor workspace storage directory containing per-workspace state.vscdb files"
+
+    user_db:
+      type: string
+      default: "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
+      description: "User-level Cursor database (global state)"
+
+  # Cursor markdown output (optional)
+  cursor_markdown_output:
+    type: string
+    default: null  # null means use workspace/.history/
+    description: "Custom output directory for Cursor markdown history. If null, uses workspace/.history/"
+
+# =============================================================================
+# REDIS - Message queue and stream configuration
+# =============================================================================
+redis:
+  # Connection settings
+  connection:
+    host:
+      type: string
+      default: "localhost"
+
+    port:
+      type: integer
+      default: 6379
+
+  # Connection pool
+  connection_pool:
+    max_connections:
+      type: integer
+      default: 10
+      description: "Maximum number of Redis connections in pool"
+
+    socket_timeout:
+      type: float
+      default: 5.0
+      unit: seconds
+      description: "Socket read/write timeout (must be > block_ms)"
+
+    socket_connect_timeout:
+      type: float
+      default: 2.0
+      unit: seconds
+      description: "Timeout for initial connection"
+
+    retry_on_timeout:
+      type: boolean
+      default: true
+      description: "Retry operations on timeout"
+
+    health_check_interval:
+      type: integer
+      default: 30
+      unit: seconds
+      description: "Interval for connection health checks"
+
+  # Advanced settings
+  decode_responses:
+    type: boolean
+    default: false
+    description: "Auto-decode responses (we handle encoding/decoding)"
+
+  socket_keepalive:
+    type: boolean
+    default: true
+
+  socket_keepalive_options:
+    TCP_KEEPIDLE:
+      type: integer
+      default: 60
+    TCP_KEEPINTVL:
+      type: integer
+      default: 10
+    TCP_KEEPCNT:
+      type: integer
+      default: 3
+
+# =============================================================================
+# STREAMS - Redis stream configurations
+# =============================================================================
+streams:
+  # Main event stream from capture layer
+  message_queue:
+    max_length:
+      type: integer
+      default: 10000
+      description: "Maximum stream length before trimming"
+
+    block_ms:
+      type: integer
+      default: 1000
+      unit: milliseconds
+      description: "Block time for XREADGROUP"
+
+    count:
+      type: integer
+      default: 100
+      description: "Maximum messages to read per XREADGROUP call"
+
+    retry_timeout_ms:
+      type: integer
+      default: 300000
+      unit: milliseconds
+      description: "Time before retrying failed messages (5 minutes)"
+
+    trim_approximate:
+      type: boolean
+      default: true
+      description: "Use approximate trimming for better performance"
+
+  # Dead letter queue for failed messages
+  dlq:
+    retention_days:
+      type: integer
+      default: 7
+      description: "Days to retain DLQ messages"
+
+    max_length:
+      type: integer
+      default: 1000
+      description: "Maximum DLQ stream length"
+
+    trim_approximate:
+      type: boolean
+      default: true
+      description: "Use approximate trimming for better performance"
+
+  # Change data capture stream
+  cdc:
+    max_length:
+      type: integer
+      default: 100000
+      description: "Larger buffer for CDC events"
+
+    block_ms:
+      type: integer
+      default: 1000
+      unit: milliseconds
+      description: "Block time for XREADGROUP"
+
+    count:
+      type: integer
+      default: 10
+      description: "Slower processing for CDC"
+
+    retry_timeout_ms:
+      type: integer
+      default: 600000
+      unit: milliseconds
+      description: "10 minutes before retry"
+
+    trim_approximate:
+      type: boolean
+      default: true
+      description: "Use approximate trimming for better performance"
+
+# =============================================================================
+# TIMEOUTS - All timeout values
+# =============================================================================
+timeouts:
+  # Database query timeouts
+  database:
+    query_timeout:
+      type: float
+      default: 1.5
+      unit: seconds
+      description: "Timeout for SQLite/DuckDB queries"
+
+    connection_timeout:
+      type: float
+      default: 2.0
+      unit: seconds
+
+  # Redis operation timeouts (see redis.connection_pool for connection timeouts)
+  redis:
+    command_timeout:
+      type: float
+      default: 1.0
+      unit: seconds
+      description: "Timeout for individual Redis commands"
+
+  # Session timeouts
+  session:
+    inactive_timeout_hours:
+      type: integer
+      default: 24
+      unit: hours
+      description: "Mark session inactive after this many hours of no activity"
+
+    cleanup_interval:
+      type: integer
+      default: 3600
+      unit: seconds
+      description: "Interval for session cleanup task"
+
+  # Extension timeouts
+  extension:
+    connect_timeout:
+      type: integer
+      default: 5000
+      unit: milliseconds
+      description: "VSCode extension Redis connection timeout"
+
+    max_reconnect_attempts:
+      type: integer
+      default: 3
+      description: "Maximum reconnection attempts before giving up"
+
+    reconnect_backoff_base:
+      type: integer
+      default: 100
+      unit: milliseconds
+      description: "Base delay for exponential backoff"
+
+    reconnect_backoff_max:
+      type: integer
+      default: 3000
+      unit: milliseconds
+      description: "Maximum backoff delay"
+
+# =============================================================================
+# MONITORING - Polling intervals and monitoring settings
+# =============================================================================
+monitoring:
+  # General health monitoring
+  health_check:
+    interval:
+      type: integer
+      default: 60
+      unit: seconds
+
+  # Queue depth monitoring
+  queue_depth:
+    warning_threshold:
+      type: integer
+      default: 5000
+      description: "Warn when queue depth exceeds this"
+
+    critical_threshold:
+      type: integer
+      default: 8000
+      description: "Critical alert when queue depth exceeds this"
+
+  # Consumer lag monitoring
+  lag:
+    warning_ms:
+      type: integer
+      default: 10000
+      unit: milliseconds
+      description: "Warn if consumer lag > 10 seconds"
+
+    critical_ms:
+      type: integer
+      default: 60000
+      unit: milliseconds
+      description: "Critical if consumer lag > 1 minute"
+
+  # Cursor database monitoring
+  cursor_database:
+    poll_interval:
+      type: float
+      default: 30.0
+      unit: seconds
+      description: "Interval for polling Cursor databases"
+
+    sync_window_hours:
+      type: integer
+      default: 24
+      unit: hours
+      description: "How far back to sync on startup"
+
+    max_retries:
+      type: integer
+      default: 3
+      description: "Maximum retries for failed operations"
+
+    retry_backoff:
+      type: float
+      default: 2.0
+      unit: seconds
+      description: "Backoff between retries"
+
+    dedup_window_hours:
+      type: integer
+      default: 24
+      unit: hours
+      description: "Window for deduplicating events"
+
+    max_concurrent_workspaces:
+      type: integer
+      default: 10
+      description: "Maximum workspaces to monitor concurrently"
+
+  # Cursor markdown monitoring
+  cursor_markdown:
+    poll_interval:
+      type: float
+      default: 120.0
+      unit: seconds
+      description: "Polling fallback interval (watchdog uses file events)"
+
+    debounce_delay:
+      type: float
+      default: 10.0
+      unit: seconds
+      description: "Debounce delay for file change events"
+
+  # Claude Code JSONL monitoring
+  claude_jsonl:
+    poll_interval:
+      type: float
+      default: 30.0
+      unit: seconds
+      description: "Interval for checking new JSONL files"
+
+  # Unified Cursor monitor (combines database + markdown)
+  unified_cursor:
+    cache_ttl:
+      type: integer
+      default: 300
+      unit: seconds
+      description: "Cache TTL for workspace lookups"
+
+  # File watcher settings
+  file_watcher:
+    stability_threshold:
+      type: integer
+      default: 100
+      unit: milliseconds
+      description: "Time file must be stable before processing"
+
+    poll_interval:
+      type: integer
+      default: 100
+      unit: milliseconds
+      description: "Polling interval for file changes"
+
+  # Extension database monitor polling
+  extension_db_monitor:
+    poll_interval:
+      type: integer
+      default: 30000
+      unit: milliseconds
+      description: "Extension database polling interval (30s)"
+
+# =============================================================================
+# BATCHING - Batch processing settings
+# =============================================================================
+batching:
+  # Default batch settings
+  default:
+    batch_size:
+      type: integer
+      default: 100
+      description: "Number of items to batch together"
+
+    batch_timeout:
+      type: float
+      default: 0.1
+      unit: seconds
+      description: "Maximum time to wait for batch to fill (100ms)"
+
+    min_batch_size:
+      type: integer
+      default: 10
+      description: "Minimum items before forcing batch flush"
+
+    max_batch_size:
+      type: integer
+      default: 100
+      description: "Maximum batch size (hard limit)"
+
+  # Event consumer batching
+  event_consumer:
+    batch_size:
+      type: integer
+      default: 100
+
+# =============================================================================
+# LOGGING - Logging configuration
+# =============================================================================
+logging:
+  # Log level
+  level:
+    type: string
+    default: "INFO"
+    enum: ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+  # Context inclusion
+  include_context:
+    type: boolean
+    default: true
+    description: "Include contextual information in logs"
+
+  # Feature-specific logging
+  log_workspace_mapping:
+    type: boolean
+    default: true
+
+  log_session_lifecycle:
+    type: boolean
+    default: true
+
+  log_markdown_writes:
+    type: boolean
+    default: true
+
+# =============================================================================
+# FEATURES - Feature flags
+# =============================================================================
+features:
+  # DuckDB sink
+  duckdb_sink:
+    enabled:
+      type: boolean
+      default: false
+      description: "Enable DuckDB sink for Cursor history"
+
+# =============================================================================
+# NOTES
+# =============================================================================
+# Configuration Precedence (highest to lowest):
+#   1. ~/.blueplane/config.yaml (user config)
+#   2. config/config.yaml (default config)
+#   3. Schema defaults (this file)
+#
+# Type Conversions:
+#   - Paths with ~ are expanded to user home directory
+#   - Relative paths are resolved from config directory
+#   - Integers/floats parsed with appropriate validation
+#   - Booleans accept: true/false, yes/no, 1/0
+#
+# Platform-Specific Paths:
+#   - Cursor paths must be configured per platform in config.yaml
+#   - Use existing src/processing/cursor/platform.py for runtime detection
+# =============================================================================

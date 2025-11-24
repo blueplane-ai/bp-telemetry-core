@@ -10,16 +10,20 @@
 
 import { createClient, RedisClientType } from "redis";
 import { TelemetryEvent } from "./types";
+import { ExtensionConfig } from "./config";
 import { randomUUID } from "crypto";
+
+/**
+ * Redis stream name for telemetry events
+ * Hardcoded as it's not configurable per schema
+ */
+const TELEMETRY_STREAM_NAME = "telemetry:events";
 
 export class QueueWriter {
   private client: RedisClientType | null = null;
   private connected: boolean = false;
 
-  constructor(
-    private redisHost: string = "localhost",
-    private redisPort: number = 6379
-  ) {}
+  constructor(private config: ExtensionConfig) {}
 
   /**
    * Initialize Redis connection
@@ -28,16 +32,16 @@ export class QueueWriter {
     try {
       this.client = createClient({
         socket: {
-          host: this.redisHost,
-          port: this.redisPort,
-          connectTimeout: 5000, // Increased timeout
+          host: this.config.redis.host,
+          port: this.config.redis.port,
+          connectTimeout: this.config.connectTimeout,
           reconnectStrategy: (retries) => {
             // Don't retry indefinitely
-            if (retries > 3) {
-              console.warn("Redis reconnection failed after 3 attempts");
+            if (retries > this.config.maxReconnectAttempts) {
+              console.warn(`Redis reconnection failed after ${this.config.maxReconnectAttempts} attempts`);
               return false;
             }
-            return Math.min(retries * 100, 3000);
+            return Math.min(retries * this.config.reconnectBackoffBase, this.config.reconnectBackoffMax);
           },
         },
       });
@@ -118,19 +122,19 @@ export class QueueWriter {
 
       // Write to Redis Stream with auto-trim
       await this.client.xAdd(
-        "telemetry:events",
+        TELEMETRY_STREAM_NAME,
         "*", // Auto-generate ID
         streamEntry,
         {
           TRIM: {
             strategy: "MAXLEN",
             strategyModifier: "~",
-            threshold: 10000,
+            threshold: this.config.streamTrimThreshold,
           },
         }
       );
 
-      console.debug(`Enqueued event ${eventId} to telemetry:events`);
+      console.debug(`Enqueued event ${eventId} to ${TELEMETRY_STREAM_NAME}`);
       return true;
     } catch (error) {
       console.error("Failed to enqueue event:", error);
@@ -164,7 +168,7 @@ export class QueueWriter {
     }
 
     try {
-      const info = await this.client.xInfoStream("telemetry:events");
+      const info = await this.client.xInfoStream(TELEMETRY_STREAM_NAME);
       return {
         length: info.length,
         firstEntry: info["first-entry"],

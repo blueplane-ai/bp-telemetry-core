@@ -13,12 +13,14 @@ import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { SessionInfo } from './types';
 import { QueueWriter } from './queueWriter';
+import { ExtensionConfig } from './config';
 
 export class SessionManager {
   private currentSession: SessionInfo | null = null;
 
   constructor(
     private context: vscode.ExtensionContext,
+    private config: ExtensionConfig,
     private queueWriter?: QueueWriter
   ) {}
 
@@ -88,12 +90,12 @@ export class SessionManager {
   }
 
   /**
-   * Compute workspace hash (SHA256, truncated to 16 chars)
+   * Compute workspace hash (SHA256, truncated)
    */
   private computeWorkspaceHash(workspacePath: string): string {
     const hash = crypto.createHash('sha256');
     hash.update(workspacePath);
-    return hash.digest('hex').substring(0, 16);
+    return hash.digest('hex').substring(0, this.config.hashTruncateLength);
   }
 
   /**
@@ -128,7 +130,7 @@ export class SessionManager {
     const path = require('path');
 
     // Create session directory if it doesn't exist
-    const sessionDir = path.join(os.homedir(), '.blueplane', 'cursor-session');
+    const sessionDir = path.join(os.homedir(), this.config.sessionDirectory);
     try {
       fs.mkdirSync(sessionDir, { recursive: true });
     } catch (error) {

@@ -59,6 +59,7 @@
     "test": "node ./out/test/runTest.js"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.0",
     "@types/node": "^18.0.0",
     "@types/vscode": "^1.80.0",
     "@typescript-eslint/eslint-plugin": "^5.60.0",
@@ -67,6 +68,7 @@
     "typescript": "^5.1.0"
   },
   "dependencies": {
+    "js-yaml": "^4.1.0",
     "redis": "^5.0.0"
   }
 }

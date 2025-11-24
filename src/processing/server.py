@@ -130,11 +130,11 @@ class TelemetryServer:
         logger.info("Initializing Redis connection")
         
         redis_config = self.config.redis
-        
+
         self.redis_client = redis.Redis(
             host=redis_config.host,
             port=redis_config.port,
-            db=redis_config.db,
+            db=0,  # Redis default database
             socket_timeout=redis_config.socket_timeout,
             socket_connect_timeout=redis_config.socket_connect_timeout,
             decode_responses=False,  # We handle encoding/decoding
@@ -162,13 +162,14 @@ class TelemetryServer:
         )
         
         # Create Claude Code event consumer
+        consumer_group = "processors"  # Standard consumer group for message queue
         self.consumer = ClaudeEventConsumer(
             redis_client=self.redis_client,
             claude_writer=self.claude_writer,
             cdc_publisher=self.cdc_publisher,
             stream_name=stream_config.name,
-            consumer_group=stream_config.consumer_group,
-            consumer_name=f"{stream_config.consumer_group}-1",
+            consumer_group=consumer_group,
+            consumer_name=f"{consumer_group}-1",
             batch_size=stream_config.count,
             batch_timeout=stream_config.block_ms / 1000.0,
             block_ms=stream_config.block_ms,
@@ -178,8 +179,8 @@ class TelemetryServer:
 
     def _initialize_cursor_monitor(self) -> None:
         """Initialize Cursor database monitor."""
-        # Load cursor config
-        cursor_config = self.config.get_cursor_config("database_monitor")
+        # Load cursor monitoring config
+        cursor_config = self.config.get_monitoring_config("cursor_database")
         enabled = cursor_config.get("enabled", True)
 
         if not enabled:
@@ -216,10 +217,10 @@ class TelemetryServer:
 
     def _initialize_markdown_monitor(self) -> None:
         """Initialize Cursor Markdown History monitor."""
-        # Load cursor config
-        markdown_config = self.config.get_cursor_config("markdown_monitor")
-        duckdb_config = self.config.get_cursor_config("duckdb_sink")
-        
+        # Load monitoring and feature config
+        markdown_config = self.config.get_monitoring_config("cursor_markdown")
+        duckdb_config = self.config.get("features.duckdb_sink", {})
+
         enabled = markdown_config.get("enabled", True)
 
         if not enabled:
@@ -265,8 +266,8 @@ class TelemetryServer:
 
     def _initialize_unified_cursor_monitor(self) -> None:
         """Initialize UnifiedCursorMonitor (replaces database + markdown monitors)."""
-        # Load cursor config
-        unified_config = self.config.get_cursor_config("unified_monitor")
+        # Load unified cursor monitoring config
+        unified_config = self.config.get_monitoring_config("unified_cursor")
         enabled = unified_config.get("enabled", False)
 
         if not enabled:

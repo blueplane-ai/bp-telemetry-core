@@ -27,12 +27,3 @@ export interface TelemetryEvent {
   payload: Record<string, any>;
   metadata?: Record<string, any>;
 }
-
-/**
- * Configuration for the extension
- */
-export interface ExtensionConfig {
-  enabled: boolean;
-  redisHost: string;
-  redisPort: number;
-}

@@ -142,7 +142,7 @@ def main():
         redis_client = redis.Redis(
             host=config.redis.host,
             port=config.redis.port,
-            db=config.redis.db,
+            db=0,  # Redis default database
             decode_responses=False
         )
         
