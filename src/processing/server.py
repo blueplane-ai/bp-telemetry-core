@@ -316,15 +316,10 @@ class TelemetryServer:
 
     def _initialize_unified_cursor_monitor(self) -> None:
         """Initialize UnifiedCursorMonitor (replaces database + markdown monitors)."""
+        logger.info("Initializing Unified Cursor monitor")
+
         # Load unified cursor monitoring config
         unified_config = self.config.get_monitoring_config("unified_cursor")
-        enabled = unified_config.get("enabled", False)
-
-        if not enabled:
-            logger.info("Unified Cursor monitor is disabled, using legacy monitors")
-            return
-
-        logger.info("Initializing Unified Cursor monitor")
 
         # Require session monitor to be initialized
         if not self.session_monitor:
@@ -514,7 +509,7 @@ class TelemetryServer:
                 self.monitor_threads.append(markdown_thread)
                 logger.info("Cursor Markdown History monitor started")
 
-            # Start unified cursor monitor (if enabled)
+            # Start unified cursor monitor
             if self.unified_cursor_monitor:
                 def run_unified_cursor_monitor():
                     import asyncio
