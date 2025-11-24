@@ -27,7 +27,7 @@ def test_session_start():
     sys.stdin = StringIO(json.dumps(test_input))
 
     try:
-        from src.capture.claude_code.hooks.session_start import SessionStartHook
+        from blueplane.capture.claude_code.hooks.session_start import SessionStartHook
 
         hook = SessionStartHook()
 
@@ -59,7 +59,7 @@ def test_user_prompt_submit():
     sys.stdin = StringIO(json.dumps(test_input))
 
     try:
-        from src.capture.claude_code.hooks.user_prompt_submit import UserPromptSubmitHook
+        from blueplane.capture.claude_code.hooks.user_prompt_submit import UserPromptSubmitHook
 
         hook = UserPromptSubmitHook()
 
@@ -94,7 +94,7 @@ def test_pre_tool_use():
     sys.stdin = StringIO(json.dumps(test_input))
 
     try:
-        from src.capture.claude_code.hooks.pre_tool_use import PreToolUseHook
+        from blueplane.capture.claude_code.hooks.pre_tool_use import PreToolUseHook
 
         hook = PreToolUseHook()
 
@@ -135,7 +135,7 @@ def test_post_tool_use():
     sys.stdin = StringIO(json.dumps(test_input))
 
     try:
-        from src.capture.claude_code.hooks.post_tool_use import PostToolUseHook
+        from blueplane.capture.claude_code.hooks.post_tool_use import PostToolUseHook
 
         hook = PostToolUseHook()
 

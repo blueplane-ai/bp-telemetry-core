@@ -144,7 +144,7 @@ def check_database():
     """Check database status and content."""
     print("\n4️⃣  DATABASE STATUS")
     print("-" * 70)
-    from src.processing.database.sqlite_client import SQLiteClient
+    from blueplane.processing.database.sqlite_client import SQLiteClient
     
     db_path = Path.home() / ".blueplane" / "telemetry.db"
     if db_path.exists():

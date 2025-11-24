@@ -50,7 +50,7 @@ def trigger_session_start(session_id: str, workspace_path: str) -> bool:
     sys.stdin = StringIO(json.dumps(hook_input))
 
     try:
-        from src.capture.claude_code.hooks.session_start import SessionStartHook
+        from blueplane.capture.claude_code.hooks.session_start import SessionStartHook
         hook = SessionStartHook()
         result = hook.execute()
         return result == 0

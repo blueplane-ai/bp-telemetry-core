@@ -14,7 +14,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from src.processing.cursor.markdown_writer import CursorMarkdownWriter, TRACE_RELEVANT_KEYS
+from blueplane.processing.cursor.markdown_writer import CursorMarkdownWriter, TRACE_RELEVANT_KEYS
 
 
 def test_markdown_writer():

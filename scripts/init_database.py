@@ -17,8 +17,8 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.processing.database.sqlite_client import SQLiteClient
-from src.processing.database.schema import create_schema, get_schema_version, SCHEMA_VERSION
+from blueplane.processing.database.sqlite_client import SQLiteClient
+from blueplane.processing.database.schema import create_schema, get_schema_version, SCHEMA_VERSION
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,7 +64,7 @@ def main() -> int:
     elif current_version < SCHEMA_VERSION:
         # Migration needed
         logger.info(f"Migrating schema from version {current_version} to {SCHEMA_VERSION}")
-        from src.processing.database.schema import migrate_schema
+        from blueplane.processing.database.schema import migrate_schema
         migrate_schema(client, current_version, SCHEMA_VERSION)
     else:
         logger.info(f"Database schema is up to date (version {current_version})")

@@ -16,8 +16,8 @@ import sys
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.processing.database.sqlite_client import SQLiteClient
-from src.processing.database.schema import (
+from blueplane.processing.database.sqlite_client import SQLiteClient
+from blueplane.processing.database.schema import (
     migrate_schema, get_schema_version, SCHEMA_VERSION,
     create_schema
 )

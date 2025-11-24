@@ -20,9 +20,9 @@ from datetime import datetime, timezone
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.capture.shared.queue_writer import MessageQueueWriter
-from src.capture.shared.config import Config
-from src.processing.database.sqlite_client import SQLiteClient
+from blueplane.capture.shared.queue_writer import MessageQueueWriter
+from blueplane.capture.shared.config import Config
+from blueplane.processing.database.sqlite_client import SQLiteClient
 
 def generate_test_event(event_type: str, session_id: str = None) -> dict:
     """Generate a test event."""
