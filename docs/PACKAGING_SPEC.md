@@ -156,34 +156,77 @@ ENTRYPOINT ["python", "-m", "src.processing.server"]
 ### 4.1 Package Layout
 
 ```
-blueplane-telemetry-core/
-├── pyproject.toml
+bp-telemetry-core/
+├── requirements.txt
+├── pyproject.toml (planned)
 ├── src/
-│   └── blueplane/
-│       ├── __init__.py
-│       ├── capture/
-│       │   ├── __init__.py
-│       │   ├── claude_code/
-│       │   └── cursor/
-│       ├── processing/
-│       │   ├── __init__.py
-│       │   ├── server.py
-│       │   └── ...
-│       ├── cli/
-│       │   ├── __init__.py
-│       │   └── main.py
-│       └── shared/
-│           ├── __init__.py
-│           └── ...
-├── docker/
+│   ├── capture/
+│   │   ├── __init__.py
+│   │   ├── claude_code/
+│   │   │   ├── __init__.py
+│   │   │   ├── hook_base.py
+│   │   │   └── hooks/
+│   │   │       ├── session_start.py
+│   │   │       ├── session_end.py
+│   │   │       ├── user_prompt_submit.py
+│   │   │       ├── pre_tool_use.py
+│   │   │       ├── post_tool_use.py
+│   │   │       ├── pre_compact.py
+│   │   │       └── stop.py
+│   │   ├── cursor/
+│   │   │   ├── __init__.py
+│   │   │   ├── hook_base.py
+│   │   │   ├── extension/
+│   │   │   │   ├── package.json
+│   │   │   │   ├── tsconfig.json
+│   │   │   │   ├── src/           # TypeScript source
+│   │   │   │   ├── out/           # Compiled JavaScript (gitignored)
+│   │   │   │   └── *.vsix         # Built VSIX package (gitignored)
+│   │   │   └── hooks/
+│   │   │       ├── before_submit_prompt.py
+│   │   │       ├── after_agent_response.py
+│   │   │       ├── before_shell_execution.py
+│   │   │       └── ...
+│   │   └── shared/
+│   │       ├── __init__.py
+│   │       ├── config.py
+│   │       ├── event_schema.py
+│   │       ├── privacy.py
+│   │       ├── project_utils.py
+│   │       └── queue_writer.py
+│   ├── processing/
+│   │   ├── __init__.py
+│   │   ├── server.py
+│   │   ├── claude_code/
+│   │   ├── cursor/
+│   │   ├── common/
+│   │   ├── database/
+│   │   ├── metrics/
+│   │   └── slow_path/
+│   ├── cli/
+│   │   ├── __init__.py (planned)
+│   │   ├── main.py (planned)
+│   │   └── config/
+│   └── mcp/
+│       └── (MCP server integration)
+├── scripts/
+│   ├── install_claude_hooks.py
+│   ├── install_cursor.py
+│   ├── init_database.py
+│   ├── init_redis.py
+│   ├── verify_installation.py
+│   └── start_server.py
+├── tests/
+├── config/
+├── docs/
+├── docker/ (planned)
 │   ├── Dockerfile.server
 │   └── docker-compose.yml
-├── installers/
-│   └── install.sh
-└── extensions/
-    └── cursor/
-        └── blueplane-telemetry.vsix
+└── installers/ (planned)
+    └── install.sh
 ```
+
+**Note**: The current structure uses a flat `src/` organization without a `blueplane/` namespace package. This simplifies development imports and allows direct module access (e.g., `from src.capture.shared import config`).
 
 ### 4.2 pyproject.toml
 
@@ -196,18 +239,18 @@ build-backend = "setuptools.build_meta"
 name = "blueplane-telemetry"
 version = "0.1.0"
 description = "Privacy-first telemetry for AI-assisted coding"
-authors = [{name = "Sierra Labs", email = "support@blueplane.ai"}]
+authors = [{name = "Sierra Labs LLC", email = "support@blueplane.ai"}]
 license = {text = "AGPL-3.0-only"}
 requires-python = ">=3.9"
 dependencies = [
     "redis>=4.6.0",
-    "aioredis>=2.0.0",
     "aiosqlite>=0.19.0",
     "pyyaml>=6.0",
     "click>=8.0",
     "rich>=13.0",
     "fastapi>=0.104.0",
     "uvicorn>=0.24.0",
+    "watchdog>=3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -220,12 +263,18 @@ dev = [
 ]
 
 [project.scripts]
-bp = "blueplane.cli.main:cli"
-bp-server = "blueplane.processing.server:main"
+bp = "src.cli.main:cli"
+bp-server = "src.processing.server:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["src*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.json"]
 ```
+
+**Note**: The package structure uses direct `src.*` imports rather than a `blueplane.*` namespace. Entry points reference `src.cli.main` and `src.processing.server` directly. Dependencies reflect the actual `requirements.txt` in use.
 
 ## 5. Cursor Extension Packaging
 
@@ -243,22 +292,25 @@ npm install
 # Compile TypeScript
 npm run compile
 
-# Package as VSIX
-npx vsce package --out ../../../../extensions/cursor/blueplane-telemetry.vsix
+# Package as VSIX (output to extension directory)
+npx vsce package
 
-echo "VSIX built: extensions/cursor/blueplane-telemetry.vsix"
+echo "VSIX built: src/capture/cursor/extension/blueplane-cursor-telemetry-*.vsix"
 ```
+
+**Convention**: The VSIX file is built directly in the extension directory (`src/capture/cursor/extension/`) and should be gitignored. This keeps build artifacts colocated with their source.
 
 ### 5.2 Extension Installation
 
 ```bash
 # Install in Cursor (command line)
-cursor --install-extension extensions/cursor/blueplane-telemetry.vsix
+cursor --install-extension src/capture/cursor/extension/*.vsix
 
 # Or manual installation via Cursor UI:
 # 1. Open Cursor
 # 2. Cmd+Shift+P → "Install from VSIX"
-# 3. Select blueplane-telemetry.vsix
+# 3. Navigate to src/capture/cursor/extension/
+# 4. Select blueplane-cursor-telemetry-*.vsix
 ```
 
 ### 5.3 Auto-Update Strategy (Fast-Follow)
@@ -426,9 +478,14 @@ install_cursor_extension() {
         # Build VSIX
         ./scripts/build_cursor_extension.sh
 
-        # Install extension
-        cursor --install-extension extensions/cursor/blueplane-telemetry.vsix
-        echo -e "${GREEN}✓ Cursor extension installed${NC}"
+        # Install extension (find the built VSIX)
+        VSIX_PATH=$(find src/capture/cursor/extension -name "*.vsix" -type f | head -1)
+        if [ -n "$VSIX_PATH" ]; then
+            cursor --install-extension "$VSIX_PATH"
+            echo -e "${GREEN}✓ Cursor extension installed${NC}"
+        else
+            echo -e "${RED}✗ VSIX not found${NC}"
+        fi
     else
         echo -e "${YELLOW}⚠ Cursor not found, skipping extension${NC}"
     fi
