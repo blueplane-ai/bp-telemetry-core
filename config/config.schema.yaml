@@ -500,9 +500,6 @@ features:
 # =============================================================================
 # NOTES
 # =============================================================================
-# Variable Substitution:
-#   - ${section.key} references are resolved at load time
-#
 # Configuration Precedence (highest to lowest):
 #   1. ~/.blueplane/config.yaml (user config)
 #   2. config/config.yaml (default config)

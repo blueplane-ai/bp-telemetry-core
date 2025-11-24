@@ -127,7 +127,8 @@ export function loadExtensionConfig(configPath?: string): ExtensionConfig {
       DEFAULT_CONFIG.reconnectBackoffMax,
 
     streamTrimThreshold:
-      config?.streams?.max_length || DEFAULT_CONFIG.streamTrimThreshold,
+      config?.streams?.message_queue?.max_length ||
+      DEFAULT_CONFIG.streamTrimThreshold,
 
     sessionDirectory:
       stripHomePrefix(config?.paths?.cursor_sessions_dir) ||
