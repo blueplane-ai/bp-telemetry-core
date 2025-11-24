@@ -819,13 +819,18 @@ rm -rf ~/.claude/projects/test
 
 ## Appendix A: Error Codes
 
-| Code | Description                      | Resolution                 |
-| ---- | -------------------------------- | -------------------------- |
-| E001 | Docker not installed             | Install Docker Desktop     |
-| E002 | Redis connection failed          | Check Docker containers    |
-| E003 | Database initialization failed   | Check disk space           |
-| E004 | Claude hooks installation failed | Check permissions          |
-| E005 | Cursor extension build failed    | Check Node.js installation |
+| Code | Description                      | Resolution                                            |
+| ---- | -------------------------------- | ----------------------------------------------------- |
+| E001 | Docker not installed             | Install Docker Desktop                                |
+| E002 | Redis connection failed          | Check Docker containers                               |
+| E003 | Database initialization failed   | Check disk space                                      |
+| E004 | Claude hooks installation failed | Check permissions                                     |
+| E005 | Cursor extension build failed    | Check Node.js installation                            |
+| E006 | Docker daemon not running        | Start Docker Desktop application                      |
+| E007 | Docker containers not running    | Run: docker-compose up -d                             |
+| E008 | Cursor extension not installed   | Install Cursor extension (optional)                   |
+| E009 | Processing server not healthy    | Check server logs: docker logs blueplane-server       |
+| E010 | Configuration invalid            | Copy config files from config/ to ~/.blueplane/config |
 
 ## Appendix B: File Locations
 
