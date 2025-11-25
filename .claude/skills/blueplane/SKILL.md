@@ -485,9 +485,135 @@ tail -n 100 ~/.blueplane/server.log | grep -i error
 git add . && git commit
 ```
 
+## Database Overview
+
+Blueplane uses a hybrid storage approach with SQLite for persistent storage and Redis for message queuing and real-time metrics.
+
+### Storage Architecture
+
+```
+~/.blueplane/
+├── telemetry.db        # SQLite database (primary storage)
+├── server.log          # Server logs
+├── server.pid          # Process ID file
+└── config.yaml         # User configuration (optional)
+```
+
+### SQLite Database Schema
+
+The SQLite database (`~/.blueplane/telemetry.db`) contains the following main tables:
+
+#### 1. `claude_raw_traces` - Claude Code Events
+
+Stores all events from Claude Code JSONL transcripts.
+
+**Key Fields:**
+- `sequence` - Auto-incrementing primary key
+- `event_id` - Unique event identifier
+- `external_id` - Claude session/conversation ID
+- `event_type` - Type of event (message, tool_use, system_event, etc.)
+- `platform` - Always 'claude_code'
+- `timestamp` - Event timestamp
+- `uuid` - Claude event UUID (for threading)
+- `parent_uuid` - Parent event UUID (for threading)
+- `workspace_hash` - Workspace identifier
+- `project_name` - Human-readable project name
+- `message_role` - user/assistant (for message events)
+- `message_model` - Model used (e.g., claude-sonnet-4.5)
+- `input_tokens`, `output_tokens` - Token usage
+- `event_data` - Compressed full event (zlib)
+
+#### 2. `cursor_raw_traces` - Cursor Events
+
+Stores all events from Cursor database monitoring.
+
+**Key Fields:**
+- `sequence` - Auto-incrementing primary key
+- `event_id` - Unique event identifier
+- `external_session_id` - Cursor session ID
+- `event_type` - Type of event
+- `timestamp` - Event timestamp
+- `workspace_hash` - Workspace identifier
+- `database_table` - Source table in Cursor DB
+- `generation_uuid` - AI generation identifier
+- `composer_id` - Composer session identifier
+- `bubble_id` - Chat bubble identifier
+- `event_data` - Compressed full event (zlib)
+
+#### 3. `conversations` - Unified Conversations Table
+
+Tracks conversations across both platforms.
+
+**Key Fields:**
+- `id` - Internal conversation ID (UUID)
+- `session_id` - NULL for Claude Code, references cursor_sessions.id for Cursor
+- `external_id` - Platform-specific external ID
+- `platform` - 'claude_code' or 'cursor'
+- `workspace_hash` - Workspace identifier
+- `workspace_name` - Human-readable workspace name
+- `started_at` - Conversation start timestamp
+- `ended_at` - Conversation end timestamp (NULL if active)
+- `interaction_count` - Number of interactions
+- `acceptance_rate` - Code acceptance rate
+- `total_tokens` - Total tokens used
+- `total_changes` - Total code changes
+
+**Important Platform Differences:**
+- **Claude Code**: `session_id` is always NULL (sessions = conversations)
+- **Cursor**: `session_id` references a `cursor_sessions` entry
+
+#### 4. `cursor_sessions` - Cursor IDE Sessions
+
+Stores Cursor IDE window sessions (Cursor only, no Claude Code sessions).
+
+**Key Fields:**
+- `id` - Internal session ID (UUID)
+- `external_session_id` - Session ID from Cursor extension
+- `workspace_hash` - Workspace identifier
+- `workspace_name` - Human-readable workspace name
+- `workspace_path` - Full workspace path
+- `started_at` - Session start timestamp
+- `ended_at` - Session end timestamp (NULL if active)
+
+### Redis Streams
+
+Redis streams are used for message queuing and event processing:
+
+- `telemetry:events` - Main event stream (from capture → processing)
+- `telemetry:message_queue` - Legacy stream name
+- `cdc:events` - Change data capture events (database updates)
+
+### Decompressing Event Data
+
+The `event_data` field in raw trace tables is compressed with zlib. To decompress and view full event data:
+
+```python
+import sqlite3
+import zlib
+import json
+from pathlib import Path
+
+db_path = Path.home() / '.blueplane' / 'telemetry.db'
+conn = sqlite3.connect(str(db_path))
+
+# Get an event
+cursor = conn.execute("""
+    SELECT event_data FROM claude_raw_traces
+    WHERE sequence = ?
+""", (1,))
+
+row = cursor.fetchone()
+if row:
+    compressed_data = row[0]
+    decompressed = zlib.decompress(compressed_data)
+    event = json.loads(decompressed)
+    print(json.dumps(event, indent=2))
+```
+
 ## See Also
 
 - **Redis Streams**: Check stream health and consumer groups
 - **Database Schema**: Check SQLite database for data integrity
 - **Configuration**: `~/.blueplane/config.yaml` or `config/config.yaml`
 - **Log Analysis**: Search and filter logs for specific issues
+- **Session & Conversation Schema**: See `docs/SESSION_CONVERSATION_SCHEMA.md` for detailed schema design

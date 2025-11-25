@@ -305,6 +305,35 @@ paths:
 
 See `config/config.schema.yaml` for complete documentation of all configuration options.
 
+## Claude Code Skill (Recommended)
+
+For the best development experience with Claude Code, install the **Blueplane management skill** at the user level. This enables Claude to understand and interact with Blueplane telemetry data across all your projects.
+
+### Installing the Blueplane Skill
+
+```bash
+# Copy the skill to your user-level Claude skills directory
+mkdir -p ~/.claude/skills
+cp -r .claude/skills/blueplane ~/.claude/skills/
+
+# The skill will now be available in all Claude Code sessions
+```
+
+### What the Skill Provides
+
+- **Server Management**: Start, stop, restart, and monitor the telemetry server
+- **Database Queries**: Retrieve trace, session, project, and conversation data
+- **Troubleshooting**: Debug telemetry issues and check system health
+- **Development Workflow**: Integrated server lifecycle management during development
+
+Once installed, you can ask Claude to:
+- "Show me recent Claude Code traces"
+- "What Cursor sessions are in the database?"
+- "Restart the Blueplane server"
+- "Show me conversation data for this workspace"
+
+See [Blueplane Skill Documentation](./.claude/skills/blueplane/SKILL.md) for complete reference.
+
 ## Documentation
 
 - [Architecture Overview](./docs/ARCHITECTURE.md) - System design and component details
