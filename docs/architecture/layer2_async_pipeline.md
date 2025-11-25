@@ -109,9 +109,10 @@ graph TB
 ### Message Queue Consumer
 
 ```python
-# server/fast_path/consumer.py (pseudocode)
+# Platform-specific event consumers (e.g., claude_code/event_consumer.py)
+# Pseudocode:
 
-class FastPathConsumer:
+class EventConsumer:
     """
     High-throughput consumer that writes raw events with zero blocking.
     Target: <10ms per batch at P95.
@@ -169,7 +170,8 @@ class FastPathConsumer:
 ### Batch Writer for SQLite
 
 ```python
-# server/fast_path/sqlite_writer.py (pseudocode)
+# Platform-specific raw traces writers (e.g., claude_code/raw_traces_writer.py)
+# Pseudocode:
 
 class SQLiteBatchWriter:
     """
@@ -209,7 +211,8 @@ class SQLiteBatchWriter:
 ### CDC Publisher
 
 ```python
-# server/fast_path/cdc_publisher.py (pseudocode)
+# Shared CDC publisher (common/cdc_publisher.py)
+# Pseudocode:
 
 class CDCPublisher:
     """

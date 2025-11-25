@@ -1,8 +1,13 @@
 # Implementation Plan: Cursor Hooks and Traces to SQL
 
-**Status**: Planning  
-**Target**: Layer 2 Processing Pipeline  
+**Status**: Historical - Implementation Complete
+**Target**: Layer 2 Processing Pipeline
 **Date**: January 2025
+
+> **Note**: This document represents the original implementation plan from January 2025. The implementation has been completed with some structural changes:
+> - The `fast_path/` directory has been replaced with platform-specific directories: `claude_code/` and `cursor/`
+> - Common utilities (BatchManager, CDCPublisher) are now in `common/` directory
+> - See [README.md](../README.md) for current directory structure
 
 ---
 
@@ -52,7 +57,7 @@ src/
       __init__.py
       sqlite_client.py      # SQLite connection and operations
       schema.py             # Schema definitions and migrations
-      writer.py             # Batch writer for raw_traces
+      writer.py             # Batch writer for platform-specific raw traces
 ```
 
 #### Step 1.2: Implement SQLite Client
@@ -80,7 +85,9 @@ class SQLiteClient:
 **File**: `src/processing/database/schema.py`
 
 **Schema to Create**:
-1. **raw_traces** table (from `docs/architecture/layer2_db_architecture.md`)
+1. **Platform-specific raw traces tables** (from `docs/architecture/layer2_db_architecture.md`)
+   - **cursor_raw_traces** - For Cursor events (see `docs/CURSOR_RAW_TRACES_CAPTURE.md`)
+   - **claude_raw_traces** - For Claude Code events (see `docs/CLAUDE_JSONL_SCHEMA.md`)
    - sequence (PRIMARY KEY AUTOINCREMENT)
    - ingested_at (TIMESTAMP)
    - event_id, session_id, event_type, platform, timestamp
@@ -97,7 +104,8 @@ class SQLiteClient:
 **Key Functions**:
 ```python
 def create_schema(db_path: str) -> None
-def create_raw_traces_table(conn: sqlite3.Connection) -> None
+def create_cursor_raw_traces_table(conn: sqlite3.Connection) -> None
+def create_claude_raw_traces_table(conn: sqlite3.Connection) -> None
 def create_conversations_table(conn: sqlite3.Connection) -> None
 def create_indexes(conn: sqlite3.Connection) -> None
 def migrate_schema(conn: sqlite3.Connection, from_version: int, to_version: int) -> None
@@ -327,7 +335,7 @@ tests/
 **Requirements**:
 - Check Redis Stream has messages
 - Verify SQLite database exists
-- Query raw_traces table
+- Query cursor_raw_traces and claude_raw_traces tables
 - Verify events are compressed correctly
 - Check CDC stream has events
 
@@ -409,13 +417,13 @@ After implementation, verify:
 
 - [ ] Redis Stream `telemetry:events` is being consumed
 - [ ] SQLite database `~/.blueplane/telemetry.db` exists
-- [ ] `raw_traces` table has rows
+- [ ] Platform-specific tables (`cursor_raw_traces`, `claude_raw_traces`) have rows
 - [ ] Events are compressed (check BLOB size)
 - [ ] Indexed fields are populated correctly
 - [ ] CDC stream `cdc:events` has entries
 - [ ] Consumer group `processors` is tracking progress
 - [ ] Failed messages go to DLQ after retries
-- [ ] No blocking of hook execution
+- [ ] No blocking of extension/hook execution
 - [ ] Performance targets are met
 
 ---

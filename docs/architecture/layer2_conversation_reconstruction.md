@@ -41,7 +41,7 @@ class ConversationWorker:
         """
         Process CDC event to update conversation structure.
 
-        - Read full event from SQLite raw_traces table (decompress event_data)
+        - Read full event from platform-specific SQLite raw traces table (decompress event_data)
         - Route to platform-specific reconstruction based on platform field
         - Update SQLite conversation tables with new turn/event
         """
@@ -62,7 +62,7 @@ class ConversationWorker:
    - `aiService.prompts`: Complete prompt history (JSON array in `ItemTable`)
    - `aiService.generations`: Generation metadata with UUIDs (JSON array in `ItemTable`)
    - `composer.composerData`: Session grouping and state (if available)
-   - Note: These are converted to `database_trace` events and stored in `raw_traces` table
+   - Note: These are converted to `database_trace` events and stored in platform-specific raw traces tables (cursor_raw_traces for Cursor)
 
 ### Reconstruction Algorithm
 
@@ -75,13 +75,13 @@ async def reconstruct_cursor_conversation(session_id: str):
     Executed by ConversationWorker in Layer 2 slow path.
     """
 
-    # 1. Load hook events from SQLite raw_traces table
+    # 1. Load hook events from cursor_raw_traces table
     hook_events = await sqlite.get_session_events(
         session_id, platform='cursor', order_by='timestamp'
     )
     # Note: Each event's event_data BLOB is decompressed to get full payload
 
-    # 2. Load database traces from SQLite raw_traces table
+    # 2. Load database traces from cursor_raw_traces table
     # Note: These are captured by the database monitor which reads from
     # Cursor's ItemTable key-value pairs (aiService.generations, etc.)
     # and converts them to database_trace events
@@ -196,7 +196,7 @@ async def reconstruct_claude_code_conversation(session_id: str):
     Executed by ConversationWorker in Layer 2 slow path.
     """
 
-    # 1. Load all hook events from SQLite raw_traces table
+    # 1. Load all hook events from claude_raw_traces table
     events = await sqlite.get_session_events(
         session_id, platform='claude', order_by='sequence'
     )
@@ -207,7 +207,7 @@ async def reconstruct_claude_code_conversation(session_id: str):
 
     # 3. Load transcript data if available
     transcript_data = await sqlite.get_transcript_events(transcript_path) if transcript_path else []
-    # Note: Transcript events are also stored in raw_traces with decompression
+    # Note: Transcript events are also stored in claude_raw_traces with decompression
 
     # 4. Build conversation timeline
     conversation = []

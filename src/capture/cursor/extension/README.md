@@ -1,13 +1,14 @@
 # Blueplane Cursor Extension
 
-VSCode extension for Cursor IDE that provides session management and database monitoring.
+VSCode extension for Cursor IDE that provides session management for telemetry capture.
 
 ## Features
 
 - **Session Management**: Generates unique session IDs and manages environment variables
-- **Database Monitoring**: Watches Cursor's SQLite database for AI generations and traces
-- **Redis Integration**: Sends events to Redis Streams message queue
+- **Redis Integration**: Sends session events to Redis Streams message queue
 - **Status Bar**: Shows active session status
+
+**Note**: Database monitoring of Cursor's SQLite databases is handled by the Python processing server, not this extension.
 
 ## Building
 
@@ -53,7 +54,6 @@ Then press F5 in VSCode to launch Extension Development Host.
 Settings available in Cursor preferences:
 
 - `blueplane.enabled`: Enable/disable telemetry capture (default: true)
-- `blueplane.databaseMonitoring`: Enable database monitoring (default: true)
 - `blueplane.redisHost`: Redis server host (default: localhost)
 - `blueplane.redisPort`: Redis server port (default: 6379)
 

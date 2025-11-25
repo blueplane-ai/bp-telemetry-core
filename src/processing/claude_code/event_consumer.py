@@ -3,9 +3,10 @@
 # License-Filename: LICENSE
 
 """
-Fast path consumer for Redis Streams.
+Claude Code Event Consumer.
 
-Reads events from Redis Streams, batches them, writes to SQLite,
+Processes Claude Code telemetry events from Redis Streams.
+Handles JSONL and transcript events, writes to claude_raw_traces table,
 and publishes CDC events for slow path workers.
 """
 
@@ -16,47 +17,53 @@ from typing import Dict, List, Any, Optional, Set
 from collections import deque
 import redis
 
-from .batch_manager import BatchManager
-from .cdc_publisher import CDCPublisher
-from ..database.writer import SQLiteBatchWriter
+from ..common.batch_manager import BatchManager
+from ..common.cdc_publisher import CDCPublisher
+from .raw_traces_writer import ClaudeRawTracesWriter
 
 logger = logging.getLogger(__name__)
 
 
-class FastPathConsumer:
+class ClaudeEventConsumer:
     """
-    High-throughput consumer that writes raw events.
-    
+    High-throughput consumer for Claude Code events.
+
+    Processes events from Redis Streams and writes to claude_raw_traces table.
     Target: <10ms per batch at P95.
-    
+
     Features:
     - Redis Streams XREADGROUP for consumer groups
     - Batch accumulation (100 events or 100ms timeout)
-    - SQLite batch writes with compression
-    - CDC event publishing
+    - SQLite batch writes with zlib compression
+    - CDC event publishing for slow path workers
     - Dead Letter Queue (DLQ) for failed messages
     - Pending Entries List (PEL) retry handling
+
+    Claude-specific handling:
+    - JSONL monitor events
+    - Transcript monitor events
+    - Session lifecycle events
     """
 
     def __init__(
         self,
         redis_client: redis.Redis,
-        sqlite_writer: SQLiteBatchWriter,
+        claude_writer: ClaudeRawTracesWriter,
         cdc_publisher: CDCPublisher,
         stream_name: str = "telemetry:events",
         consumer_group: str = "processors",
-        consumer_name: str = "fast-path-1",
+        consumer_name: str = "claude-consumer-1",
         batch_size: int = 100,
         batch_timeout: float = 0.1,
         block_ms: int = 1000,
         max_retries: int = 3,
     ):
         """
-        Initialize fast path consumer.
+        Initialize Claude event consumer.
 
         Args:
             redis_client: Redis client instance
-            sqlite_writer: SQLite batch writer
+            claude_writer: Claude raw traces writer
             cdc_publisher: CDC publisher
             stream_name: Redis Stream name
             consumer_group: Consumer group name
@@ -67,7 +74,7 @@ class FastPathConsumer:
             max_retries: Maximum retries before DLQ
         """
         self.redis_client = redis_client
-        self.sqlite_writer = sqlite_writer
+        self.claude_writer = claude_writer
         self.cdc_publisher = cdc_publisher
         self.stream_name = stream_name
         self.consumer_group = consumer_group
@@ -231,12 +238,13 @@ class FastPathConsumer:
 
     def _process_batch(self, messages: List[Dict[str, Any]]) -> List[str]:
         """
-        Process batch of messages: write to SQLite and publish CDC events.
-        
-        ACKs messages immediately after successful write to prevent message loss.
+        Process batch of Claude Code messages.
+
+        Filters for Claude Code events, writes to claude_raw_traces table,
+        and publishes CDC events. ACKs messages immediately after successful write.
 
         Args:
-            messages: List of message dictionaries
+            messages: List of message dictionaries from Redis Stream
 
         Returns:
             List of message IDs that were successfully processed
@@ -263,14 +271,11 @@ class FastPathConsumer:
             return []
 
         try:
-            # Separate events by platform for routing to correct tables
-            cursor_events = []
+            # Filter Claude Code events
             claude_events = []
-            cursor_msg_ids = []
-            claude_msg_ids = []
 
             for event, msg_id in zip(events, valid_message_ids):
-                platform = event.get('platform', 'cursor')  # Default to cursor for backward compatibility
+                platform = event.get('platform', '')
                 if platform == 'claude_code':
                     # Include JSONL/transcript events AND session lifecycle events
                     source = event.get('metadata', {}).get('source', '')
@@ -278,33 +283,24 @@ class FastPathConsumer:
                     event_type = event.get('event_type', '')
 
                     # Include events from JSONL/transcript monitors AND session lifecycle events
-                    if (source in ('jsonl_monitor', 'transcript_monitor') or 
+                    if (source in ('jsonl_monitor', 'transcript_monitor') or
                         hook_type == 'JSONLTrace' or
                         event_type in ('session_start', 'session_end')):
                         claude_events.append(event)
-                        claude_msg_ids.append(msg_id)
                     else:
                         # Skip non-essential hook events
                         logger.debug(f"Skipping Claude Code hook event: {hook_type or event_type}")
                 else:
-                    cursor_events.append(event)
-                    cursor_msg_ids.append(msg_id)
+                    # Skip non-Claude events (they should be handled by platform-specific consumers)
+                    logger.debug(f"Skipping non-Claude event with platform={platform}")
 
-            # Write to SQLite (synchronous) - route to appropriate tables
+            # Write Claude Code events to claude_raw_traces table
             start_time = time.time()
             all_sequences = []
             all_events = []
 
-            # Write Cursor events to raw_traces table
-            if cursor_events:
-                cursor_sequences = self.sqlite_writer.write_batch_sync(cursor_events)
-                all_sequences.extend(cursor_sequences)
-                all_events.extend(cursor_events)
-                logger.debug(f"Wrote {len(cursor_events)} Cursor events to raw_traces")
-
-            # Write Claude Code events to claude_raw_traces table
             if claude_events:
-                claude_sequences = self.sqlite_writer.write_claude_batch_sync(claude_events)
+                claude_sequences = self.claude_writer.write_batch_sync(claude_events)
                 all_sequences.extend(claude_sequences)
                 all_events.extend(claude_events)
                 logger.debug(f"Wrote {len(claude_events)} Claude Code events to claude_raw_traces")
@@ -318,7 +314,7 @@ class FastPathConsumer:
             for sequence, event in zip(all_sequences, all_events):
                 self.cdc_publisher.publish(sequence, event)
 
-            logger.debug(f"Processed batch: {len(events)} events ({len(cursor_events)} Cursor, {len(claude_events)} Claude), duration: {write_duration:.3f}s")
+            logger.debug(f"Processed batch: {len(claude_events)} Claude Code events, duration: {write_duration:.3f}s")
 
             # ACK messages immediately after successful write
             self._ack_messages(valid_message_ids)
@@ -614,20 +610,21 @@ class FastPathConsumer:
 
     def run(self) -> None:
         """
-        Main consumer loop.
+        Main Claude Code consumer loop.
 
-        Continuously reads from Redis Streams, batches events,
-        writes to SQLite, and publishes CDC events.
-        
+        Continuously reads Claude Code events from Redis Streams,
+        batches them, writes to claude_raw_traces table, and publishes CDC events.
+
         Features:
-        - Synchronous SQLite writes
+        - Filters for Claude Code platform events only
+        - Synchronous SQLite writes with zlib compression
         - Immediate ACK after successful write (prevents message loss)
         - Backpressure handling (adaptive batch sizing, read throttling)
         """
         self.running = True
         self._ensure_consumer_group()
 
-        logger.info(f"Fast path consumer started: {self.consumer_name}")
+        logger.info(f"Claude Code event consumer started: {self.consumer_name}")
 
         iteration = 0
         while self.running:
@@ -711,7 +708,7 @@ class FastPathConsumer:
                 logger.error(f"Error in consumer loop: {e}", exc_info=True)
                 time.sleep(1)  # Back off on error
 
-        logger.info("Fast path consumer stopped")
+        logger.info("Claude Code event consumer stopped")
 
     def stop(self) -> None:
         """Stop the consumer."""

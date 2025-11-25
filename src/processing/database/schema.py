@@ -20,59 +20,6 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 2
 
 
-def create_raw_traces_table(client: SQLiteClient) -> None:
-    """
-    Create raw_traces table for storing compressed event data.
-
-    Args:
-        client: SQLiteClient instance
-    """
-    sql = """
-    CREATE TABLE IF NOT EXISTS raw_traces (
-        -- Core identification
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-        -- Event metadata (indexed fields)
-        event_id TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        platform TEXT NOT NULL,
-        timestamp TIMESTAMP NOT NULL,
-
-        -- Context fields
-        workspace_hash TEXT,
-        project_name TEXT,
-        model TEXT,
-        tool_name TEXT,
-
-        -- Metrics (for fast filtering)
-        duration_ms INTEGER,
-        tokens_used INTEGER,
-        lines_added INTEGER,
-        lines_removed INTEGER,
-
-        -- Compressed payload (zlib level 6, achieves 7-10x compression)
-        event_data BLOB NOT NULL,
-
-        -- Generated columns for partitioning
-        event_date DATE GENERATED ALWAYS AS (DATE(timestamp)),
-        event_hour INTEGER GENERATED ALWAYS AS (CAST(strftime('%H', timestamp) AS INTEGER))
-    );
-    """
-    client.execute(sql)
-    
-    # Add project_name column for legacy databases
-    try:
-        client.execute("ALTER TABLE raw_traces ADD COLUMN project_name TEXT")
-        logger.info("Added project_name column to raw_traces table")
-    except Exception as e:
-        if "duplicate column name" not in str(e).lower():
-            logger.debug(f"Could not add project_name column (may already exist): {e}")
-    
-    logger.info("Created raw_traces table")
-
-
 def create_cursor_sessions_table(client: SQLiteClient) -> None:
     """
     Create cursor_sessions table for Cursor IDE window sessions.
@@ -336,6 +283,129 @@ def create_claude_jsonl_offsets_table(client: SQLiteClient) -> None:
     logger.info("Created claude_jsonl_offsets table")
 
 
+def create_cursor_raw_traces_table(client: SQLiteClient) -> None:
+    """
+    Create cursor_raw_traces table for Cursor telemetry events.
+
+    This table captures ALL Cursor database events including:
+    - AI generations and prompts
+    - Composer data with nested bubbles
+    - Background composer data
+    - Agent mode exit info
+    - Interactive sessions
+    - History entries
+
+    Args:
+        client: SQLiteClient instance
+    """
+    sql = """
+    CREATE TABLE IF NOT EXISTS cursor_raw_traces (
+        -- Primary key and ingestion metadata
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+        -- Event identification (indexed for queries)
+        event_id TEXT NOT NULL,
+        external_session_id TEXT,
+        event_type TEXT NOT NULL,
+        timestamp TIMESTAMP NOT NULL,
+
+        -- Source location metadata
+        storage_level TEXT NOT NULL,
+        workspace_hash TEXT NOT NULL,
+        database_table TEXT NOT NULL,
+        item_key TEXT NOT NULL,
+
+        -- AI Service fields
+        generation_uuid TEXT,
+        generation_type TEXT,
+        command_type TEXT,
+
+        -- Composer/Bubble fields
+        composer_id TEXT,
+        bubble_id TEXT,
+        server_bubble_id TEXT,
+        message_type INTEGER,
+        is_agentic BOOLEAN,
+
+        -- Content fields
+        text_description TEXT,
+        raw_text TEXT,
+        rich_text TEXT,
+
+        -- Timing fields (milliseconds)
+        unix_ms INTEGER,
+        created_at INTEGER,
+        last_updated_at INTEGER,
+        completed_at INTEGER,
+        client_start_time INTEGER,
+        client_end_time INTEGER,
+
+        -- Metrics fields
+        lines_added INTEGER,
+        lines_removed INTEGER,
+        token_count_up_until_here INTEGER,
+
+        -- Capability/Tool fields
+        capabilities_ran TEXT,
+        capability_statuses TEXT,
+
+        -- Context fields
+        project_name TEXT,
+        relevant_files TEXT,
+        selections TEXT,
+
+        -- Status fields
+        is_archived BOOLEAN,
+        has_unread_messages BOOLEAN,
+
+        -- Full event payload (compressed)
+        event_data BLOB NOT NULL,
+
+        -- Partitioning columns (generated)
+        event_date DATE GENERATED ALWAYS AS (DATE(timestamp)),
+        event_hour INTEGER GENERATED ALWAYS AS (CAST(strftime('%H', timestamp) AS INTEGER))
+    );
+    """
+    client.execute(sql)
+    logger.info("Created cursor_raw_traces table")
+
+
+def create_cursor_indexes(client: SQLiteClient) -> None:
+    """
+    Create indexes for Cursor raw traces.
+
+    Args:
+        client: SQLiteClient instance
+    """
+    indexes = [
+        # Unique constraint to prevent duplicates
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_cursor_unique_event ON cursor_raw_traces(event_id);",
+
+        # Primary query patterns
+        "CREATE INDEX IF NOT EXISTS idx_cursor_session_time ON cursor_raw_traces(external_session_id, timestamp) WHERE external_session_id IS NOT NULL;",
+        "CREATE INDEX IF NOT EXISTS idx_cursor_event_type_time ON cursor_raw_traces(event_type, timestamp);",
+        "CREATE INDEX IF NOT EXISTS idx_cursor_workspace ON cursor_raw_traces(workspace_hash, timestamp);",
+
+        # Generation and composer lookups
+        "CREATE INDEX IF NOT EXISTS idx_cursor_generation ON cursor_raw_traces(generation_uuid) WHERE generation_uuid IS NOT NULL;",
+        "CREATE INDEX IF NOT EXISTS idx_cursor_composer ON cursor_raw_traces(composer_id, timestamp) WHERE composer_id IS NOT NULL;",
+        "CREATE INDEX IF NOT EXISTS idx_cursor_bubble ON cursor_raw_traces(bubble_id) WHERE bubble_id IS NOT NULL;",
+
+        # Storage key lookups
+        "CREATE INDEX IF NOT EXISTS idx_cursor_storage_key ON cursor_raw_traces(storage_level, database_table, item_key);",
+
+        # Time-based partitioning
+        "CREATE INDEX IF NOT EXISTS idx_cursor_date_hour ON cursor_raw_traces(event_date, event_hour);",
+        "CREATE INDEX IF NOT EXISTS idx_cursor_unix_ms ON cursor_raw_traces(unix_ms DESC) WHERE unix_ms IS NOT NULL;",
+    ]
+
+    for index_sql in indexes:
+        client.execute(index_sql)
+
+    logger.info("Created Cursor indexes")
+
+
 def create_claude_indexes(client: SQLiteClient) -> None:
     """
     Create indexes for Claude Code raw traces.
@@ -344,6 +414,9 @@ def create_claude_indexes(client: SQLiteClient) -> None:
         client: SQLiteClient instance
     """
     indexes = [
+        # Unique constraint to prevent duplicates (external_id, uuid)
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_claude_unique_event ON claude_raw_traces(external_id, uuid);",
+
         # Primary query patterns
         "CREATE INDEX IF NOT EXISTS idx_claude_session_time ON claude_raw_traces(external_id, timestamp);",
         "CREATE INDEX IF NOT EXISTS idx_claude_event_type_time ON claude_raw_traces(event_type, timestamp);",
@@ -395,14 +468,8 @@ def create_indexes(client: SQLiteClient) -> None:
         # Table doesn't exist yet, will be created with new schema
         pass
     
-    indexes = [
-        "CREATE INDEX IF NOT EXISTS idx_session_time ON raw_traces(session_id, timestamp);",
-        "CREATE INDEX IF NOT EXISTS idx_event_type_time ON raw_traces(event_type, timestamp);",
-        "CREATE INDEX IF NOT EXISTS idx_date_hour ON raw_traces(event_date, event_hour);",
-        "CREATE INDEX IF NOT EXISTS idx_timestamp ON raw_traces(timestamp DESC);",
-        "CREATE INDEX IF NOT EXISTS idx_project_name ON raw_traces(project_name);",
-    ]
-    
+    indexes = []
+
     # Only create conversation indexes if table has new schema
     if has_new_schema:
         indexes.extend([
@@ -443,9 +510,9 @@ def create_schema(client: SQLiteClient) -> None:
     logger.info("Creating database schema...")
 
     # Create tables (cursor_sessions must be created before conversations due to FK)
-    create_raw_traces_table(client)
     create_claude_raw_traces_table(client)
     create_claude_jsonl_offsets_table(client)
+    create_cursor_raw_traces_table(client)
     create_cursor_sessions_table(client)
     create_conversations_table(client)
     create_trace_stats_table(client)
@@ -453,6 +520,7 @@ def create_schema(client: SQLiteClient) -> None:
     # Create indexes
     create_indexes(client)
     create_claude_indexes(client)
+    create_cursor_indexes(client)
 
     logger.info("Database schema created successfully")
 

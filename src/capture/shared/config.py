@@ -19,7 +19,6 @@ class RedisConfig:
     """Redis connection configuration."""
     host: str = "localhost"
     port: int = 6379
-    db: int = 0
     socket_timeout: float = 1.0
     socket_connect_timeout: float = 1.0
     max_connections: int = 10
@@ -29,22 +28,10 @@ class RedisConfig:
 class StreamConfig:
     """Redis Stream configuration."""
     name: str
-    consumer_group: str
     max_length: int = 10000
-    trim_approximate: bool = True
     block_ms: int = 1000
     count: int = 100
-
-
-@dataclass
-class PrivacyConfig:
-    """Privacy settings configuration."""
-    mode: str = "strict"
-    hash_file_paths: bool = True
-    hash_workspace: bool = True
-    hash_algorithm: str = "sha256"
-    hash_truncate_length: int = 16
-    opt_out: list = field(default_factory=list)
+    trim_approximate: bool = True
 
 
 class Config:
@@ -97,51 +84,41 @@ class Config:
                 config_dir = Path.home() / ".blueplane"
 
         self.config_dir = Path(config_dir)
-        self._redis_config: Optional[Dict[str, Any]] = None
-        self._privacy_config: Optional[Dict[str, Any]] = None
-        self._cursor_config: Optional[Dict[str, Any]] = None
+        self._config: Optional[Dict[str, Any]] = None
 
-        # Load configurations
-        self._load_configs()
+        # Load configuration
+        self._load_config()
 
-    def _load_configs(self) -> None:
-        """Load all configuration files."""
-        # Load Redis config
-        redis_file = self.config_dir / "redis.yaml"
-        if redis_file.exists():
-            with open(redis_file, 'r') as f:
-                self._redis_config = yaml.safe_load(f)
+    def _load_config(self) -> None:
+        """
+        Load unified configuration file.
+
+        Loads config.yaml containing
+        all settings as defined in config.schema.yaml.
+        """
+        # Try config.yaml first (standard), then redis.yaml (existing deployments)
+        config_file = self.config_dir / "config.yaml"
+        if not config_file.exists():
+            config_file = self.config_dir / "redis.yaml"
+
+        if config_file.exists():
+            with open(config_file, 'r') as f:
+                self._config = yaml.safe_load(f)
         else:
-            self._redis_config = {}
-
-        # Load Privacy config
-        privacy_file = self.config_dir / "privacy.yaml"
-        if privacy_file.exists():
-            with open(privacy_file, 'r') as f:
-                self._privacy_config = yaml.safe_load(f)
-        else:
-            self._privacy_config = {}
-
-        # Load Cursor config
-        cursor_file = self.config_dir / "cursor.yaml"
-        if cursor_file.exists():
-            with open(cursor_file, 'r') as f:
-                self._cursor_config = yaml.safe_load(f)
-        else:
-            self._cursor_config = {}
+            self._config = {}
 
     @property
     def redis(self) -> RedisConfig:
         """Get Redis configuration."""
-        redis_data = self._redis_config.get("redis", {})
+        redis_data = self._config.get("redis", {})
+        connection_data = redis_data.get("connection", {})
         pool_data = redis_data.get("connection_pool", {})
 
         return RedisConfig(
-            host=redis_data.get("host", "localhost"),
-            port=redis_data.get("port", 6379),
-            db=redis_data.get("db", 0),
-            socket_timeout=pool_data.get("socket_timeout", 1.0),
-            socket_connect_timeout=pool_data.get("socket_connect_timeout", 1.0),
+            host=connection_data.get("host", "localhost"),
+            port=connection_data.get("port", 6379),
+            socket_timeout=pool_data.get("socket_timeout", 5.0),
+            socket_connect_timeout=pool_data.get("socket_connect_timeout", 2.0),
             max_connections=pool_data.get("max_connections", 10),
         )
 
@@ -155,109 +132,102 @@ class Config:
         Returns:
             StreamConfig for the requested stream
         """
-        streams = self._redis_config.get("streams", {})
+        streams = self._config.get("streams", {})
         stream_data = streams.get(stream_type, {})
 
         return StreamConfig(
-            name=stream_data.get("name", f"telemetry:{stream_type}"),
-            consumer_group=stream_data.get("consumer_group", "processors"),
+            name=f"telemetry:{stream_type}",
             max_length=stream_data.get("max_length", 10000),
-            trim_approximate=stream_data.get("trim_approximate", True),
             block_ms=stream_data.get("block_ms", 1000),
             count=stream_data.get("count", 100),
+            trim_approximate=stream_data.get("trim_approximate", True),
         )
 
-    @property
-    def privacy(self) -> PrivacyConfig:
-        """Get privacy configuration."""
-        privacy_data = self._privacy_config.get("privacy", {})
-        sanitization = privacy_data.get("sanitization", {})
-
-        return PrivacyConfig(
-            mode=privacy_data.get("mode", "strict"),
-            hash_file_paths=sanitization.get("hash_file_paths", True),
-            hash_workspace=sanitization.get("hash_workspace", True),
-            hash_algorithm=sanitization.get("hash_algorithm", "sha256"),
-            hash_truncate_length=sanitization.get("hash_truncate_length", 16),
-            opt_out=privacy_data.get("opt_out", []),
-        )
-
-    def get_cursor_config(self, section: str) -> Dict[str, Any]:
+    def get_monitoring_config(self, section: str) -> Dict[str, Any]:
         """
-        Get Cursor-specific configuration.
+        Get monitoring configuration for a specific section.
 
         Args:
-            section: Configuration section (e.g., 'database_monitor', 'markdown_monitor')
+            section: Monitoring section name (e.g., 'cursor_database', 'cursor_markdown')
 
         Returns:
-            Dictionary of configuration values with defaults
+            Dictionary of configuration values (empty dict if section not found)
         """
-        cursor_data = self._cursor_config.get("cursor", {})
-        section_data = cursor_data.get(section, {})
-        
-        # Provide defaults for common sections
-        if section == "markdown_monitor":
-            return {
-                "enabled": section_data.get("enabled", True),
-                "output_dir": section_data.get("output_dir"),
-                "poll_interval_seconds": section_data.get("poll_interval_seconds", 120),
-                "debounce_delay_seconds": section_data.get("debounce_delay_seconds", 10),
-                "query_timeout_seconds": section_data.get("query_timeout_seconds", 1.5),
-                "trace_keys": section_data.get("trace_keys", [
-                    'aiService.generations',
-                    'aiService.prompts',
-                    'composer.composerData',
-                    'workbench.backgroundComposer.workspacePersistentData',
-                    'workbench.agentMode.exitInfo',
-                    'interactive.sessions',
-                    'history.entries',
-                    'cursorAuth/workspaceOpenedDate',
-                ]),
-            }
-        elif section == "database_monitor":
-            return {
-                "enabled": section_data.get("enabled", True),
-                "poll_interval_seconds": section_data.get("poll_interval_seconds", 30),
-                "sync_window_hours": section_data.get("sync_window_hours", 24),
-                "query_timeout_seconds": section_data.get("query_timeout_seconds", 1.5),
-                "max_retries": section_data.get("max_retries", 3),
-            }
-        elif section == "duckdb_sink":
-            return {
-                "enabled": section_data.get("enabled", False),
-                "database_path": section_data.get("database_path"),
-            }
-        else:
-            return section_data
+        monitoring = self._config.get("monitoring", {})
+        return monitoring.get(section, {})
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def _expand_path(self, path_value: Any) -> Any:
         """
-        Get arbitrary configuration value.
+        Expand path strings containing ~ to actual home directory paths.
 
         Args:
-            key: Dot-separated key path (e.g., "redis.host")
+            path_value: Configuration value (string, Path, or other)
+
+        Returns:
+            Expanded Path object if input was a string path, otherwise original value
+        """
+        if isinstance(path_value, str):
+            # Expand ~ to home directory
+            return Path(path_value).expanduser()
+        elif isinstance(path_value, Path):
+            # Already a Path, just expand it
+            return path_value.expanduser()
+        return path_value
+
+    def get(self, key: str, default: Any = None, expand_path: bool = False) -> Any:
+        """
+        Get arbitrary configuration value using dot-separated path.
+
+        The schema defines a unified config structure with sections:
+        paths, redis, streams, timeouts, monitoring, batching, logging, and features.
+
+        Args:
+            key: Dot-separated key path (e.g., "redis.connection.host")
             default: Default value if key not found
+            expand_path: If True, expand ~ in string paths to home directory
 
         Returns:
-            Configuration value or default
+            Configuration value or default. If expand_path=True and value is a path string,
+            returns Path object with expanded home directory.
         """
         parts = key.split(".")
-
-        # Determine which config to search
-        if parts[0] == "redis":
-            config = self._redis_config
-        elif parts[0] == "privacy":
-            config = self._privacy_config
-        elif parts[0] == "cursor":
-            config = self._cursor_config
-        else:
-            return default
+        config = self._config
 
         # Navigate the config dict
         for part in parts:
             if isinstance(config, dict):
-                config = config.get(part, default)
+                config = config.get(part)
+                if config is None:
+                    return default
             else:
                 return default
 
-        return config if config is not None else default
+        result = config if config is not None else default
+        
+        # Expand path if requested
+        if expand_path and result is not None:
+            result = self._expand_path(result)
+        
+        return result
+
+    def get_path(self, key: str, default: Any = None) -> Path:
+        """
+        Get a path configuration value and expand ~ to home directory.
+
+        Convenience method for getting paths that automatically expands ~.
+
+        Args:
+            key: Dot-separated key path (e.g., "paths.database.telemetry_db")
+            default: Default value if key not found (will be expanded if it's a string)
+
+        Returns:
+            Path object with expanded home directory
+
+        Example:
+            >>> config.get_path("paths.database.telemetry_db")
+            Path('/Users/username/.blueplane/telemetry.db')
+        """
+        value = self.get(key, default)
+        if value is None:
+            raise ValueError(f"Path configuration '{key}' not found and no default provided")
+        return self._expand_path(value)

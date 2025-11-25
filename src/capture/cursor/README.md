@@ -2,13 +2,15 @@
 
 Layer 1 telemetry capture system for Cursor IDE using VSCode extension and database monitoring.
 
+**Important:** Cursor does not use hooks. All telemetry is captured through the VSCode extension and database monitoring.
+
 ## Architecture
 
-### Extension-Based Approach
+### Extension-Based Approach (No Hooks)
 
 Cursor telemetry is captured through two mechanisms:
 
-- **Extension Events**: VSCode extension captures IDE events directly (session management, user actions)
+- **Extension Events**: VSCode extension manages sessions and sends session lifecycle events (start/end)
 - **Database Monitoring**: Python processing server monitors Cursor's SQLite database for AI generations and traces
 - **Workspace-Specific Sessions**: Each workspace gets its own session with unique session ID
 
@@ -22,15 +24,10 @@ Cursor telemetry is captured through two mechanisms:
            │
            ├─ Extension activated
            │  └─> Sends session_start event (workspace_hash, PID)
-           │  └─> Captures IDE events (file edits, commands, etc.)
            │
            ├─ User interacts with AI
-           │  └─> Database monitor detects changes in state.vscdb
+           │  └─> Python database monitor detects changes in state.vscdb
            │      └─> Sends AI generation events (prompts, responses, tool usage)
-           │
-           ├─ User edits file
-           │  └─> Extension captures event
-           │      └─> Sends file_edit event (session_id, workspace_hash, PID)
            │
            └─ Extension deactivated
               └─> Sends session_end event
@@ -131,6 +128,7 @@ Filename is SHA256 hash of workspace path (truncated to 16 chars).
 The extension sends session lifecycle events to Redis:
 
 **session_start:**
+
 ```json
 {
   "hook_type": "session",
@@ -159,8 +157,6 @@ Same format, but `event_type: "session_end"`.
 The extension captures:
 
 1. **Session lifecycle** - Session start/end with workspace context
-2. **IDE events** - File edits, commands, user actions
-3. **Status updates** - Extension status, errors, diagnostics
 
 ### Database Monitoring Events
 
@@ -171,41 +167,19 @@ The Python processing server monitors Cursor's `state.vscdb` database and captur
 3. **Tool usage** - MCP tool executions, file operations
 4. **Conversation traces** - Full conversation history
 
-### Event Format
-
-```json
-{
-  "version": "0.1.0",
-  "event_type": "file_edit",
-  "timestamp": "2025-11-11T10:30:00.000Z",
-  "payload": {
-    "file_extension": "py",
-    "operation": "edit"
-  },
-  "metadata": {
-    "session_id": "curs_1731283200000_abc123",
-    "pid": 12345,
-    "workspace_hash": "a1b2c3d4e5f6g7h8",
-    "platform": "cursor"
-  }
-}
-```
-
 ## Event Flow
 
 ```
 Extension Start → session_start event → Redis
     ↓
-User Action → Extension captures → Redis
-    ↓
-Database Monitor detects AI activity → Sends traces → Redis
+Python Database Monitor detects AI activity → Sends traces → Redis
     ↓
 Extension Stop → session_end event → Redis
 ```
 
 ## Privacy
 
-All hooks respect privacy settings from `~/.blueplane/config.yaml`:
+All telemetry capture respects privacy settings from `~/.blueplane/config.yaml`:
 
 - **Code content**: Never captured by default
 - **File paths**: Hashed if `file_paths` opt-out enabled
@@ -219,6 +193,7 @@ See `config/privacy.yaml` for full privacy settings.
 ### Check Extension Status
 
 View extension logs in Cursor:
+
 - `View` → `Output` → Select "Blueplane Telemetry"
 
 ### Check Session File
@@ -270,23 +245,27 @@ rm -rf ~/.blueplane/cursor-session
 ## Troubleshooting
 
 **Extension not capturing events:**
+
 - Check extension is installed and activated in Cursor
 - View extension logs: Cursor > View > Output > Blueplane Telemetry
 - Verify Redis is running: `redis-cli ping`
 - Check Redis connection in extension settings
 
 **Database monitor not working:**
+
 - Verify processing server is running: `ps aux | grep start_server.py`
 - Check server logs for database monitor errors
 - Verify Cursor's `state.vscdb` database exists in workspace
 - Ensure database monitor is enabled in configuration
 
 **Wrong session ID:**
+
 - Check session file for current workspace in `~/.blueplane/cursor-session/`
 - Verify workspace hash matches current directory hash
 - Restart extension to create new session
 
 **Events not appearing in Redis:**
+
 - Check Redis connection in extension logs
 - Verify config.yaml has correct Redis host/port
 - Ensure processing server has access to Redis
@@ -296,12 +275,14 @@ rm -rf ~/.blueplane/cursor-session
 ### Testing Extension
 
 1. Open extension directory in VSCode:
+
    ```bash
    cd src/capture/cursor/extension
    code .
    ```
 
 2. Run in debug mode:
+
    - Press F5 to launch Extension Development Host
    - Open a Cursor workspace in the new window
    - View extension logs in Output panel
@@ -323,6 +304,7 @@ rm -rf ~/.blueplane/cursor-session
 ## Architecture
 
 See main documentation:
+
 - [Layer 1 Capture](../../../docs/architecture/layer1_capture.md)
 - [Database Architecture](../../../docs/architecture/layer2_db_architecture.md)
 - [Overall Architecture](../../../docs/ARCHITECTURE.md)
@@ -330,6 +312,7 @@ See main documentation:
 ## Next Steps
 
 After installation, Layer 2 (Processing) will:
+
 1. Read events from Redis Streams
 2. Process and enrich events
 3. Store in DuckDB (raw traces) and SQLite (conversations)

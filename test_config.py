@@ -20,31 +20,31 @@ def test_config():
     print()
     
     # Test cursor markdown monitor config
-    markdown_config = config.get_cursor_config("markdown_monitor")
-    print("Markdown Monitor Config:")
+    markdown_config = config.get_monitoring_config("cursor_markdown")
+    print("Cursor Markdown Monitor Config:")
     for key, value in markdown_config.items():
         print(f"  {key}: {value}")
     print()
-    
+
     # Test cursor database monitor config
-    db_config = config.get_cursor_config("database_monitor")
-    print("Database Monitor Config:")
+    db_config = config.get_monitoring_config("cursor_database")
+    print("Cursor Database Monitor Config:")
     for key, value in db_config.items():
         print(f"  {key}: {value}")
     print()
-    
-    # Test DuckDB config
-    duckdb_config = config.get_cursor_config("duckdb_sink")
-    print("DuckDB Sink Config:")
+
+    # Test DuckDB feature flag
+    duckdb_config = config.get("features.duckdb_sink", {})
+    print("DuckDB Sink Feature Config:")
     for key, value in duckdb_config.items():
         print(f"  {key}: {value}")
     print()
-    
-    # Test get method
-    enabled = config.get("cursor.markdown_monitor.enabled", True)
-    print(f"Markdown monitoring enabled (via get): {enabled}")
-    
-    debounce = config.get("cursor.markdown_monitor.debounce_delay_seconds", 10)
+
+    # Test get method with correct schema paths
+    poll_interval = config.get("monitoring.cursor_markdown.poll_interval", 120.0)
+    print(f"Markdown poll interval (via get): {poll_interval}s")
+
+    debounce = config.get("monitoring.cursor_markdown.debounce_delay", 10.0)
     print(f"Debounce delay (via get): {debounce}s")
     
     print()

@@ -73,12 +73,14 @@ Hooks are installed globally at: `~/.claude/hooks/telemetry/`
 ### Quick Install
 
 ```bash
-# Install hooks and update settings.json
-python scripts/install_claude_code.py
+# Install session hooks and update settings.json
+python scripts/install_claude_hooks.py
 
 # Dry run to see what would be done
-python scripts/install_claude_code.py --dry-run
+python scripts/install_claude_hooks.py --dry-run
 ```
+
+**Note:** Currently only session lifecycle hooks (session_start.py and session_end.py) are installed. Other hooks are available but disabled by default.
 
 ### Manual Installation
 

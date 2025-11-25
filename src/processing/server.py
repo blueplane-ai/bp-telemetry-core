@@ -9,6 +9,7 @@ Orchestrates fast path consumer, database initialization, and graceful shutdown.
 """
 
 import logging
+import os
 import signal
 import sys
 import threading
@@ -19,12 +20,15 @@ import redis
 
 from .database.sqlite_client import SQLiteClient
 from .database.schema import create_schema
-from .database.writer import SQLiteBatchWriter
-from .fast_path.consumer import FastPathConsumer
-from .fast_path.cdc_publisher import CDCPublisher
+from .claude_code.event_consumer import ClaudeEventConsumer
+from .common.cdc_publisher import CDCPublisher
+from .claude_code.raw_traces_writer import ClaudeRawTracesWriter
 from .cursor.session_monitor import SessionMonitor
 from .cursor.database_monitor import CursorDatabaseMonitor
 from .cursor.markdown_monitor import CursorMarkdownMonitor
+from .cursor.unified_cursor_monitor import UnifiedCursorMonitor, CursorMonitorConfig
+from .cursor.event_consumer import CursorEventProcessor
+from .cursor.raw_traces_writer import CursorRawTracesWriter
 from .cursor.session_timeout import CursorSessionTimeoutManager
 from .cursor.metrics import get_metrics
 from .claude_code.transcript_monitor import ClaudeCodeTranscriptMonitor
@@ -57,22 +61,74 @@ class TelemetryServer:
         """
         self.config = config or Config()
         self.db_path = db_path or str(Path.home() / ".blueplane" / "telemetry.db")
-        
+        self.pid_file = Path.home() / ".blueplane" / "server.pid"
+
         self.sqlite_client: Optional[SQLiteClient] = None
         self.sqlite_writer: Optional[SQLiteBatchWriter] = None
         self.redis_client: Optional[redis.Redis] = None
         self.cdc_publisher: Optional[CDCPublisher] = None
-        self.consumer: Optional[FastPathConsumer] = None
+        self.consumer: Optional[ClaudeEventConsumer] = None
         self.session_monitor: Optional[SessionMonitor] = None
         self.cursor_timeout_manager: Optional[CursorSessionTimeoutManager] = None
         self.cursor_monitor: Optional[CursorDatabaseMonitor] = None
         self.markdown_monitor: Optional[CursorMarkdownMonitor] = None
+        self.unified_cursor_monitor: Optional[UnifiedCursorMonitor] = None
+        self.cursor_event_processor: Optional[CursorEventProcessor] = None
+        self.cursor_raw_traces_writer: Optional[CursorRawTracesWriter] = None
         self.claude_code_monitor: Optional[ClaudeCodeTranscriptMonitor] = None
         self.claude_session_monitor: Optional[ClaudeCodeSessionMonitor] = None
         self.claude_jsonl_monitor: Optional[ClaudeCodeJSONLMonitor] = None
         self.claude_timeout_manager: Optional[SessionTimeoutManager] = None
         self.running = False
         self.monitor_threads: list[threading.Thread] = []
+
+    def _acquire_pid_lock(self) -> None:
+        """
+        Acquire PID lock to ensure only one server instance runs.
+
+        Raises:
+            RuntimeError: If another server instance is already running
+        """
+        if self.pid_file.exists():
+            # Read existing PID
+            try:
+                existing_pid = int(self.pid_file.read_text().strip())
+
+                # Check if process is still running
+                try:
+                    os.kill(existing_pid, 0)  # Signal 0 just checks if process exists
+                    # Process exists - another server is running
+                    raise RuntimeError(
+                        f"Server already running with PID {existing_pid}. "
+                        f"If this is incorrect, remove {self.pid_file} and try again."
+                    )
+                except OSError:
+                    # Process doesn't exist - stale PID file
+                    logger.warning(f"Removing stale PID file (PID {existing_pid} not found)")
+                    self.pid_file.unlink()
+            except ValueError:
+                # Invalid PID file content - remove it
+                logger.warning("Removing invalid PID file")
+                self.pid_file.unlink()
+
+        # Write our PID
+        self.pid_file.parent.mkdir(parents=True, exist_ok=True)
+        self.pid_file.write_text(str(os.getpid()))
+        logger.info(f"Acquired PID lock: {os.getpid()}")
+
+    def _release_pid_lock(self) -> None:
+        """Release PID lock by removing PID file."""
+        if self.pid_file.exists():
+            try:
+                # Verify it's our PID before removing
+                pid = int(self.pid_file.read_text().strip())
+                if pid == os.getpid():
+                    self.pid_file.unlink()
+                    logger.info(f"Released PID lock: {os.getpid()}")
+                else:
+                    logger.warning(f"PID file contains different PID ({pid} vs {os.getpid()}), not removing")
+            except Exception as e:
+                logger.error(f"Error releasing PID lock: {e}")
 
     def _initialize_database(self) -> None:
         """Initialize SQLite database and schema."""
@@ -113,10 +169,10 @@ class TelemetryServer:
             # Ensure schema exists (for new tables)
             create_schema(self.sqlite_client)
             logger.info(f"Database schema is up to date (version {current_version})")
-        
-        # Create writer
-        self.sqlite_writer = SQLiteBatchWriter(self.sqlite_client)
-        
+
+        # Create Claude writer
+        self.claude_writer = ClaudeRawTracesWriter(self.sqlite_client)
+
         logger.info("Database initialized successfully")
 
     def _initialize_redis(self) -> None:
@@ -124,11 +180,11 @@ class TelemetryServer:
         logger.info("Initializing Redis connection")
         
         redis_config = self.config.redis
-        
+
         self.redis_client = redis.Redis(
             host=redis_config.host,
             port=redis_config.port,
-            db=redis_config.db,
+            db=0,  # Redis default database
             socket_timeout=redis_config.socket_timeout,
             socket_connect_timeout=redis_config.socket_connect_timeout,
             decode_responses=False,  # We handle encoding/decoding
@@ -155,25 +211,26 @@ class TelemetryServer:
             max_length=cdc_config.max_length
         )
         
-        # Create consumer
-        self.consumer = FastPathConsumer(
+        # Create Claude Code event consumer
+        consumer_group = "processors"  # Standard consumer group for message queue
+        self.consumer = ClaudeEventConsumer(
             redis_client=self.redis_client,
-            sqlite_writer=self.sqlite_writer,
+            claude_writer=self.claude_writer,
             cdc_publisher=self.cdc_publisher,
             stream_name=stream_config.name,
-            consumer_group=stream_config.consumer_group,
-            consumer_name=f"{stream_config.consumer_group}-1",
+            consumer_group=consumer_group,
+            consumer_name=f"{consumer_group}-1",
             batch_size=stream_config.count,
             batch_timeout=stream_config.block_ms / 1000.0,
             block_ms=stream_config.block_ms,
         )
-        
-        logger.info("Fast path consumer initialized")
+
+        logger.info("Claude Code event consumer initialized")
 
     def _initialize_cursor_monitor(self) -> None:
         """Initialize Cursor database monitor."""
-        # Load cursor config
-        cursor_config = self.config.get_cursor_config("database_monitor")
+        # Load cursor monitoring config
+        cursor_config = self.config.get_monitoring_config("cursor_database")
         enabled = cursor_config.get("enabled", True)
 
         if not enabled:
@@ -210,10 +267,10 @@ class TelemetryServer:
 
     def _initialize_markdown_monitor(self) -> None:
         """Initialize Cursor Markdown History monitor."""
-        # Load cursor config
-        markdown_config = self.config.get_cursor_config("markdown_monitor")
-        duckdb_config = self.config.get_cursor_config("duckdb_sink")
-        
+        # Load monitoring and feature config
+        markdown_config = self.config.get_monitoring_config("cursor_markdown")
+        duckdb_config = self.config.get("features.duckdb_sink", {})
+
         enabled = markdown_config.get("enabled", True)
 
         if not enabled:
@@ -255,6 +312,52 @@ class TelemetryServer:
             f"poll_interval={markdown_config.get('poll_interval_seconds', 120)}s, "
             f"debounce={markdown_config.get('debounce_delay_seconds', 10)}s, "
             f"duckdb_enabled={enable_duckdb})"
+        )
+
+    def _initialize_unified_cursor_monitor(self) -> None:
+        """Initialize UnifiedCursorMonitor (replaces database + markdown monitors)."""
+        logger.info("Initializing Unified Cursor monitor")
+
+        # Load unified cursor monitoring config
+        unified_config = self.config.get_monitoring_config("unified_cursor")
+
+        # Require session monitor to be initialized
+        if not self.session_monitor:
+            logger.warning("Session monitor not initialized, cannot start Unified monitor")
+            return
+
+        # Create monitor config
+        monitor_config = CursorMonitorConfig(
+            query_timeout=unified_config.get("query_timeout_seconds", 1.5),
+            debounce_delay=unified_config.get("debounce_delay_seconds", 10.0),
+            poll_interval=unified_config.get("poll_interval_seconds", 60.0),
+            cache_ttl=unified_config.get("cache_ttl_seconds", 300),
+            max_retries=unified_config.get("max_retries", 3),
+        )
+
+        # Create unified monitor
+        self.unified_cursor_monitor = UnifiedCursorMonitor(
+            redis_client=self.redis_client,
+            session_monitor=self.session_monitor,
+            config=monitor_config
+        )
+
+        # Create cursor raw traces writer
+        self.cursor_raw_traces_writer = CursorRawTracesWriter(self.sqlite_client)
+
+        # Create event processor (consumer with ACK support)
+        self.cursor_event_processor = CursorEventProcessor(
+            redis_client=self.redis_client,
+            db_writer=self.cursor_raw_traces_writer,
+            pending_check_interval=unified_config.get("pending_check_interval", 30)
+        )
+
+        logger.info(
+            f"Unified Cursor monitor initialized "
+            f"(debounce={monitor_config.debounce_delay}s, "
+            f"poll_fallback={monitor_config.poll_interval}s, "
+            f"cache_ttl={monitor_config.cache_ttl}s, "
+            f"pending_check={unified_config.get('pending_check_interval', 30)}s)"
         )
 
     def _initialize_claude_code_monitor(self) -> None:
@@ -326,12 +429,16 @@ class TelemetryServer:
         logger.info("Starting Blueplane Telemetry Server...")
 
         try:
+            # Acquire PID lock to ensure single instance
+            self._acquire_pid_lock()
+
             # Initialize components
             self._initialize_database()
             self._initialize_redis()
             self._initialize_consumer()
             self._initialize_cursor_monitor()
             self._initialize_markdown_monitor()
+            self._initialize_unified_cursor_monitor()
             self._initialize_claude_code_monitor()
 
             # Start monitors in background threads (if enabled)
@@ -396,11 +503,51 @@ class TelemetryServer:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     loop.run_until_complete(self.markdown_monitor.start())
-                
+
                 markdown_thread = threading.Thread(target=run_markdown_monitor, daemon=True)
                 markdown_thread.start()
                 self.monitor_threads.append(markdown_thread)
                 logger.info("Cursor Markdown History monitor started")
+
+            # Start unified cursor monitor
+            if self.unified_cursor_monitor:
+                def run_unified_cursor_monitor():
+                    import asyncio
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(self.unified_cursor_monitor.start())
+                        # Keep running
+                        while True:
+                            loop.run_until_complete(asyncio.sleep(1))
+                    except Exception as e:
+                        logger.error(f"Unified Cursor monitor thread crashed: {e}", exc_info=True)
+
+                def run_cursor_event_processor():
+                    import asyncio
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(self.cursor_event_processor.start())
+                        # Keep running
+                        while True:
+                            loop.run_until_complete(asyncio.sleep(1))
+                    except Exception as e:
+                        logger.error(f"Cursor event processor thread crashed: {e}", exc_info=True)
+
+                unified_thread = threading.Thread(target=run_unified_cursor_monitor, daemon=True)
+                unified_thread.start()
+                self.monitor_threads.append(unified_thread)
+                logger.info("Unified Cursor monitor started")
+
+                processor_thread = threading.Thread(target=run_cursor_event_processor, daemon=True)
+                processor_thread.start()
+                self.monitor_threads.append(processor_thread)
+                logger.info("Cursor event processor started")
 
             # Start Claude Code monitors (if enabled)
             if self.claude_session_monitor and self.claude_jsonl_monitor:
@@ -558,6 +705,9 @@ class TelemetryServer:
         # Close Redis connection
         if self.redis_client:
             self.redis_client.close()
+
+        # Release PID lock
+        self._release_pid_lock()
 
         logger.info("Server stopped")
 

@@ -90,7 +90,7 @@ class MessageQueueWriter:
             self._connection_pool = redis.ConnectionPool(
                 host=redis_config.host,
                 port=redis_config.port,
-                db=redis_config.db,
+                db=0,  # Redis default database
                 max_connections=redis_config.max_connections,
                 socket_timeout=redis_config.socket_timeout,
                 socket_connect_timeout=redis_config.socket_connect_timeout,

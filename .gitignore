@@ -30,7 +30,6 @@ dump.rdb
 *.swp
 *.swo
 *~
-.claude/
 .history/
 
 # OS
@@ -70,4 +69,5 @@ node_modules/
 package-lock.json
 out/
 *.tsbuildinfo
+*.vsix
 

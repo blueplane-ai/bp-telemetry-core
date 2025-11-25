@@ -28,8 +28,8 @@ cat ~/.claude/settings.json | jq '.hooks | length'
 redis-cli XLEN telemetry:events
 redis-cli XINFO GROUPS telemetry:events
 
-# 4. Check database
-sqlite3 ~/.blueplane/telemetry.db "SELECT COUNT(*) FROM raw_traces;"
+# 4. Check database (cursor events)
+sqlite3 ~/.blueplane/telemetry.db "SELECT COUNT(*) FROM cursor_raw_traces;"
 
 # 5. Check processing server
 ps aux | grep start_server.py
@@ -189,20 +189,28 @@ def check_database():
         try:
             client = SQLiteClient(str(db_path))
             with client.get_connection() as conn:
-                cursor = conn.execute('SELECT COUNT(*) FROM raw_traces')
-                total = cursor.fetchone()[0]
-                print(f"   Total events: {total}")
+                # Check both Cursor and Claude traces
+                cursor = conn.execute('SELECT COUNT(*) FROM cursor_raw_traces')
+                cursor_total = cursor.fetchone()[0]
+                print(f"   Total Cursor events: {cursor_total}")
+
+                try:
+                    cursor = conn.execute('SELECT COUNT(*) FROM claude_raw_traces')
+                    claude_total = cursor.fetchone()[0]
+                    print(f"   Total Claude events: {claude_total}")
+                except:
+                    print(f"   Claude raw traces: table not created yet")
 
                 cursor = conn.execute('''
-                    SELECT COUNT(*) FROM raw_traces
+                    SELECT COUNT(*) FROM cursor_raw_traces
                     WHERE timestamp > datetime('now', '-1 hour')
                 ''')
                 recent = cursor.fetchone()[0]
-                print(f"   Events (last hour): {recent}")
+                print(f"   Cursor events (last hour): {recent}")
 
                 cursor = conn.execute('''
                     SELECT event_type, COUNT(*) as cnt
-                    FROM raw_traces
+                    FROM cursor_raw_traces
                     GROUP BY event_type
                     ORDER BY cnt DESC
                     LIMIT 10
@@ -211,14 +219,14 @@ def check_database():
                 for row in cursor.fetchall():
                     print(f"     - {row[0]}: {row[1]}")
 
-                cursor = conn.execute('SELECT COUNT(*) FROM raw_traces WHERE model IS NOT NULL')
+                cursor = conn.execute('SELECT COUNT(*) FROM cursor_raw_traces WHERE model IS NOT NULL')
                 with_model = cursor.fetchone()[0]
                 if with_model > 0:
                     print(f"   ✅ Events with model data: {with_model}")
                 else:
-                    print(f"   ⚠️  No events with model data (hooks may need update)")
+                    print(f"   ⚠️  No events with model data (database monitor may need update)")
 
-                cursor = conn.execute('SELECT COUNT(*) FROM raw_traces WHERE event_type = "database_trace"')
+                cursor = conn.execute('SELECT COUNT(*) FROM cursor_raw_traces WHERE event_type = "database_trace"')
                 db_traces = cursor.fetchone()[0]
                 if db_traces > 0:
                     print(f"   ✅ Database traces: {db_traces}")
@@ -378,7 +386,7 @@ python scripts/start_server.py
 For **Claude Code**:
 ```bash
 # Reinstall hooks to ensure latest version
-python scripts/install_claude_code.py
+python scripts/install_claude_hooks.py
 
 # Restart Claude Code
 ```
@@ -394,7 +402,7 @@ client = SQLiteClient(str(Path.home() / '.blueplane' / 'telemetry.db'))
 with client.get_connection() as conn:
     cursor = conn.execute('''
         SELECT model, tokens_used, timestamp
-        FROM raw_traces
+        FROM cursor_raw_traces
         WHERE model IS NOT NULL
         ORDER BY sequence DESC
         LIMIT 5
@@ -473,7 +481,7 @@ ls -la src/capture/cursor/extension/
 For **Claude Code hooks**:
 ```bash
 # Install with appropriate permissions
-python scripts/install_claude_code.py
+python scripts/install_claude_hooks.py
 
 # Or manually with sudo if needed:
 sudo mkdir -p ~/.claude/hooks/telemetry
@@ -601,7 +609,7 @@ tail -f ~/.blueplane/logs/processing.log
 **Check database growth:**
 
 ```bash
-watch -n 5 'sqlite3 ~/.blueplane/telemetry.db "SELECT COUNT(*) FROM raw_traces;"'
+watch -n 5 'sqlite3 ~/.blueplane/telemetry.db "SELECT COUNT(*) FROM cursor_raw_traces;"'
 ```
 
 ### Health Check Dashboard
@@ -632,11 +640,11 @@ Expected output:
 # Redis queue length
 redis-cli XLEN telemetry:events
 
-# Database event count
-sqlite3 ~/.blueplane/telemetry.db "SELECT COUNT(*) FROM raw_traces;"
+# Database event count (Cursor)
+sqlite3 ~/.blueplane/telemetry.db "SELECT COUNT(*) FROM cursor_raw_traces;"
 
 # Recent events
-sqlite3 ~/.blueplane/telemetry.db "SELECT event_type, COUNT(*) FROM raw_traces WHERE timestamp > datetime('now', '-1 hour') GROUP BY event_type;"
+sqlite3 ~/.blueplane/telemetry.db "SELECT event_type, COUNT(*) FROM cursor_raw_traces WHERE timestamp > datetime('now', '-1 hour') GROUP BY event_type;"
 
 # Redis consumer group info
 redis-cli XINFO GROUPS telemetry:events

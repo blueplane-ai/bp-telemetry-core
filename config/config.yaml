@@ -1,0 +1,182 @@
+# Copyright © 2025 Sierra Labs LLC
+# SPDX-License-Identifier: AGPL-3.0-only
+# License-Filename: LICENSE
+
+# =============================================================================
+# Blueplane Telemetry Core - Unified Configuration
+# =============================================================================
+# This is the default configuration file for bp-telemetry-core.
+# See config.schema.yaml for complete documentation of all options.
+#
+# User overrides: ~/.blueplane/config.yaml
+# =============================================================================
+
+# =============================================================================
+# PATHS
+# =============================================================================
+paths:
+  # Blueplane data directory
+  blueplane_home: "~/.blueplane"
+
+  # Database paths
+  database:
+    telemetry_db: "~/.blueplane/telemetry.db"
+    cursor_history_db: "~/.blueplane/cursor_history.duckdb"
+    event_buffer_db: "~/.blueplane/event_buffer.db"
+    workspace_cache: "~/.blueplane/workspace_db_cache.json"
+
+  # Cursor session tracking
+  cursor_sessions_dir: "~/.blueplane/cursor-session"
+
+  # Claude Code paths
+  claude:
+    projects_base: "~/.claude/projects"
+    hooks_dir: "~/.claude/hooks/telemetry"
+    settings_file: "~/.claude/settings.json"
+
+  # Cursor IDE paths (macOS defaults shown, adjust for your platform)
+  # See src/processing/cursor/platform.py for platform-specific detection
+  cursor:
+    workspace_storage: "~/Library/Application Support/Cursor/User/workspaceStorage"
+    user_db: "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
+
+  # Cursor markdown output (null = use workspace/.history/)
+  cursor_markdown_output: null
+
+# =============================================================================
+# REDIS
+# =============================================================================
+redis:
+  connection:
+    host: localhost
+    port: 6379
+
+  connection_pool:
+    max_connections: 10
+    socket_timeout: 5.0 # seconds (must be > block_ms)
+    socket_connect_timeout: 2.0 # seconds
+    retry_on_timeout: true
+    health_check_interval: 30 # seconds
+
+  # Advanced settings
+  decode_responses: false
+  socket_keepalive: true
+  socket_keepalive_options:
+    TCP_KEEPIDLE: 60
+    TCP_KEEPINTVL: 10
+    TCP_KEEPCNT: 3
+
+# =============================================================================
+# STREAMS
+# =============================================================================
+streams:
+  # Main event stream from capture layer
+  message_queue:
+    max_length: 10000
+    block_ms: 1000 # 1 second
+    count: 100
+    retry_timeout_ms: 300000 # 5 minutes
+    trim_approximate: true
+
+  dlq:
+    retention_days: 7
+    max_length: 1000
+    trim_approximate: true
+
+  cdc:
+    max_length: 100000
+    block_ms: 1000
+    count: 10
+    retry_timeout_ms: 600000 # 10 minutes
+    trim_approximate: true
+
+# =============================================================================
+# TIMEOUTS
+# =============================================================================
+timeouts:
+  database:
+    query_timeout: 1.5 # seconds
+    connection_timeout: 2.0 # seconds
+
+  redis:
+    command_timeout: 1.0 # seconds
+
+  session:
+    inactive_timeout_hours: 24
+    cleanup_interval: 3600 # seconds (1 hour)
+
+  extension:
+    connect_timeout: 5000 # milliseconds
+    max_reconnect_attempts: 3
+    reconnect_backoff_base: 100 # milliseconds
+    reconnect_backoff_max: 3000 # milliseconds
+
+# =============================================================================
+# MONITORING
+# =============================================================================
+monitoring:
+  health_check:
+    interval: 60 # seconds
+
+  queue_depth:
+    warning_threshold: 5000
+    critical_threshold: 8000
+
+  lag:
+    warning_ms: 10000 # 10 seconds
+    critical_ms: 60000 # 1 minute
+
+  cursor_database:
+    poll_interval: 30.0 # seconds
+    sync_window_hours: 24
+    max_retries: 3
+    retry_backoff: 2.0 # seconds
+    dedup_window_hours: 24
+    max_concurrent_workspaces: 10
+
+  cursor_markdown:
+    poll_interval: 120.0 # seconds (2 minutes)
+    debounce_delay: 10.0 # seconds
+
+  claude_jsonl:
+    poll_interval: 30.0 # seconds
+
+  unified_cursor:
+    cache_ttl: 300 # seconds (5 minutes)
+
+  file_watcher:
+    stability_threshold: 100 # milliseconds
+    poll_interval: 100 # milliseconds
+
+  extension_db_monitor:
+    poll_interval: 30000 # milliseconds (30 seconds)
+
+# =============================================================================
+# BATCHING
+# =============================================================================
+batching:
+  default:
+    batch_size: 100
+    batch_timeout: 0.1 # seconds (100ms)
+    min_batch_size: 10
+    max_batch_size: 100
+
+  event_consumer:
+    batch_size: 100
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+logging:
+  level: INFO # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  include_context: true
+  log_workspace_mapping: true
+  log_session_lifecycle: true
+  log_markdown_writes: true
+
+# =============================================================================
+# FEATURES
+# =============================================================================
+features:
+  duckdb_sink:
+    enabled: false
