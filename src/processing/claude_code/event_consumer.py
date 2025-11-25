@@ -255,7 +255,7 @@ class ClaudeEventConsumer:
         # Extract events (skip None events from parse errors)
         events = []
         valid_message_ids = []
-        
+
         for msg in messages:
             if msg['event'] is not None:
                 event = msg['event']
@@ -626,11 +626,8 @@ class ClaudeEventConsumer:
 
         logger.info(f"Claude Code event consumer started: {self.consumer_name}")
 
-        iteration = 0
         while self.running:
             try:
-                iteration += 1
-                
                 # Check pending message count - prioritize if backlog is significant
                 pending_count = self._get_pending_count()
                 
