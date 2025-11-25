@@ -75,18 +75,25 @@ npm run compile
 # Run: "Developer: Set Log Level" → Select "Trace"
 # This enables detailed logging (optional, for debugging)
 
-# 8. Start the processing server (in a separate terminal)
+# 8. Start the processing server
 cd ../..
-python scripts/start_server.py
+python scripts/server_ctl.py start --daemon
 
 # The processing server includes:
 # - Fast path consumer (Redis → SQLite)
-# - Database monitor (polls Cursor SQLite databases)
-# - Session monitor (tracks active sessions from Redis)
+# - UnifiedCursorMonitor (monitors Cursor SQLite databases)
+# - Session monitor (tracks active sessions)
+# - Event processor with ACK support
+
+# Server management commands:
+# python scripts/server_ctl.py status --verbose  # Check server status
+# python scripts/server_ctl.py stop             # Graceful shutdown
+# python scripts/server_ctl.py restart --daemon # Restart server
 
 # 9. Verify installation
 # Check extension is active in Cursor: Extensions → Blueplane Telemetry
-# Check processing server logs for any errors
+# Check processing server: python scripts/server_ctl.py status
+# View logs: tail -f ~/.blueplane/server.log
 # Monitor Redis: redis-cli XLEN telemetry:events
 ```
 
@@ -121,8 +128,13 @@ python scripts/init_database.py
 # 6. Install Claude Code hooks
 # TODO: Add Claude Code installation instructions
 
-# 7. Start the processing server (in a separate terminal)
-python scripts/start_server.py
+# 7. Start the processing server
+python scripts/server_ctl.py start --daemon
+
+# Server management:
+# python scripts/server_ctl.py status   # Check status
+# python scripts/server_ctl.py stop     # Stop server
+# tail -f ~/.blueplane/server.log       # View logs
 
 # 8. Verify installation
 # TODO: Add Claude Code verification steps
@@ -412,7 +424,8 @@ bp-telemetry-core/
 ├── scripts/
 │   ├── init_redis.py        # Initialize Redis streams
 │   ├── init_database.py     # Initialize SQLite database
-│   ├── start_server.py      # Start processing server
+│   ├── server_ctl.py        # Server lifecycle management (start/stop/restart/status)
+│   ├── start_server.py      # Direct server start (legacy, use server_ctl.py instead)
 │   ├── install_claude_hooks.py # Install Claude Code session hooks
 │   ├── test_end_to_end.py   # End-to-end test
 │   └── test_database_traces.py
