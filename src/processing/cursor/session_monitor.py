@@ -24,6 +24,7 @@ from .session_persistence import (
     DatabaseError
 )
 from ..database.sqlite_client import SQLiteClient
+from ...capture.shared.redis_streams import TELEMETRY_EVENTS_STREAM
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class SessionMonitor:
         self,
         redis_client: redis.Redis,
         sqlite_client: Optional[SQLiteClient] = None,
-        stream_name: str = "telemetry:events",
+        stream_name: str = TELEMETRY_EVENTS_STREAM,
         consumer_group: str = "cursor_session_monitors",
         consumer_name: str = "cursor_session_monitor",
     ):
@@ -203,12 +204,17 @@ class SessionMonitor:
             logger.error(f"Failed to recover active sessions: {e}", exc_info=True)
 
     def _ensure_consumer_group(self) -> None:
-        """Ensure consumer group exists, create if not."""
+        """
+        Ensure consumer group exists, create if not.
+
+        Uses id='0' to process from beginning, ensuring no messages are lost
+        after restart. Safe because processed messages are trimmed via ACK.
+        """
         try:
             self.redis_client.xgroup_create(
                 self.stream_name,
                 self.consumer_group,
-                id='0',
+                id='0',  # Start from beginning - process unprocessed messages
                 mkstream=True
             )
             logger.info(

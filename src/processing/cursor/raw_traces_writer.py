@@ -55,6 +55,7 @@ class CursorRawTracesWriter:
                     rows.append(row)
             except Exception as e:
                 logger.error(f"Error extracting row from event: {e}")
+                logger.debug(f"Event type: {type(event)}, Event keys: {list(event.keys()) if isinstance(event, dict) else 'not a dict'}")
                 continue
 
         if not rows:
@@ -77,7 +78,16 @@ class CursorRawTracesWriter:
         """
         metadata = event.get("metadata", {})
         payload = event.get("payload", {})
-        full_data = payload.get("full_data", {})
+
+        # Handle full_data which can be either a dict or a list
+        full_data_raw = payload.get("full_data", {})
+        if isinstance(full_data_raw, list):
+            # For list data (like interactive.sessions or history.entries),
+            # store the list in a wrapper dict for consistent handling
+            full_data = {"items": full_data_raw} if full_data_raw else {}
+        else:
+            full_data = full_data_raw if isinstance(full_data_raw, dict) else {}
+
         extracted = payload.get("extracted_fields", {})
 
         # Generate event_id if not present
@@ -148,8 +158,8 @@ class CursorRawTracesWriter:
         is_archived = self._safe_get_bool(full_data, "isArchived")
         has_unread_messages = self._safe_get_bool(full_data, "hasUnreadMessages")
 
-        # Compress full event data
-        event_data_compressed = self.batch_writer.compress_event(full_data)
+        # Compress full event data (use original full_data_raw to preserve lists)
+        event_data_compressed = self.batch_writer.compress_event(full_data_raw)
 
         return (
             event_id,

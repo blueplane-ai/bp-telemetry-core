@@ -24,6 +24,7 @@ from .session_monitor import ClaudeCodeSessionMonitor
 from .jsonl_offset_store import JSONLOffsetStore
 from ..database.sqlite_client import SQLiteClient
 from ...capture.shared.project_utils import derive_project_name, recover_workspace_path_from_slug
+from ...capture.shared.redis_streams import TELEMETRY_MESSAGE_QUEUE_STREAM
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +123,9 @@ class ClaudeCodeJSONLMonitor:
         self.running = True
         logger.info("Claude Code JSONL monitor started")
 
-        # Run monitoring loop directly (blocks until stopped)
-        await self._monitor_loop()
+        # Run monitoring loop as background task
+        asyncio.create_task(self._monitor_loop())
+        logger.info("JSONL monitor loop started in background")
 
     async def stop(self):
         """Stop JSONL file monitoring."""
@@ -463,9 +465,9 @@ class ClaudeCodeJSONLMonitor:
                 },
             }
 
-            # Send to Redis stream
+            # Send to Redis stream (use message_queue for main event processing)
             self.redis_client.xadd(
-                "telemetry:events",
+                TELEMETRY_MESSAGE_QUEUE_STREAM,
                 {
                     k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
                     for k, v in event.items()

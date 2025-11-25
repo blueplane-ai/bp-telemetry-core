@@ -35,6 +35,7 @@ from .data_extractors import (
     GenerationExtractor,
     PromptExtractor
 )
+from ...capture.shared.redis_streams import TELEMETRY_EVENTS_STREAM
 
 logger = logging.getLogger(__name__)
 
@@ -339,7 +340,7 @@ class EventQueuer:
 
     def __init__(self, redis_client: redis.Redis):
         self.redis_client = redis_client
-        self.stream_name = "telemetry:events"
+        self.stream_name = TELEMETRY_EVENTS_STREAM
         self.max_stream_length = 10000
         self.consumer_group = "processors"
 

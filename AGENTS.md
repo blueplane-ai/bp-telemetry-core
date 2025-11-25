@@ -265,8 +265,14 @@ pip install -e ".[dev]"
 pytest tests/
 pytest tests/ -v --cov=src --cov-report=term-missing
 
-# Start local server (Layer 2)
-python -m src.processing.server
+# Server management (Layer 2) - RECOMMENDED
+python scripts/server_ctl.py start --daemon  # Start in background
+python scripts/server_ctl.py stop            # Graceful shutdown
+python scripts/server_ctl.py restart --daemon # Restart in background
+python scripts/server_ctl.py status --verbose # Detailed status
+
+# Alternative: Direct server start (use server_ctl.py instead)
+python -m src.processing.server  # Foreground only, no PID management
 
 # CLI commands (Layer 3)
 blueplane status

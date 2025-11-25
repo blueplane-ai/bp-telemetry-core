@@ -185,7 +185,7 @@ python scripts/init_redis.py
 
 ```bash
 # Start the telemetry processing server
-python scripts/start_server.py
+python scripts/server_ctl.py start --daemon
 
 # The server will:
 # - Load configuration from ~/.blueplane/config.yaml (if exists) or config/config.yaml
@@ -204,7 +204,7 @@ python scripts/start_server.py
 python scripts/check_status.py
 
 # Or manually check:
-ps aux | grep start_server.py
+python scripts/server_ctl.py status --verbose
 redis-cli XLEN telemetry:events
 ```
 
@@ -220,7 +220,7 @@ Once everything is running, your telemetry data is being collected in the follow
 | **Redis Metrics**           | `localhost:6379`                                             | Real-time metrics and message queue     |
 | **Claude Code Sessions**    | `~/.claude/projects/<project>/<session-hash>.jsonl`          | Raw Claude Code transcripts             |
 | **Cursor Workspace Traces** | `~/Library/Application Support/Cursor/User/<workspace-hash>` | Raw Cursor Conversation Info            |
-| **Processing Logs**         | Console output from `start_server.py`                        | Server activity and errors on stdout    |
+| **Processing Logs**         | `~/.blueplane/server.log`                                    | Server activity and errors (daemon mode)|
 
 ### Accessing Your Data
 
@@ -347,7 +347,8 @@ ls -la ~/.claude/hooks/telemetry/*.py
 
 ```bash
 # Check server logs
-# Look for errors in the console where start_server.py is running
+# Look for errors in the server logs
+tail -f ~/.blueplane/server.log
 
 # Verify database exists
 ls -la ~/.blueplane/telemetry.db
@@ -355,6 +356,39 @@ ls -la ~/.blueplane/telemetry.db
 # Check Redis stream
 redis-cli XLEN telemetry:events
 ```
+
+## Step 8: Install Claude Code Skill (Recommended)
+
+For the best experience working with Blueplane in Claude Code, install the Blueplane management skill at the user level. This makes the skill available across all your projects.
+
+```bash
+# Copy the skill to your user-level Claude skills directory
+mkdir -p ~/.claude/skills
+cp -r .claude/skills/blueplane ~/.claude/skills/
+
+# The skill will now be available in all Claude Code sessions
+```
+
+### What the Skill Provides
+
+The Blueplane skill gives Claude comprehensive knowledge about:
+
+- **Server Management**: Commands to start, stop, restart, and check server status
+- **Database Queries**: How to retrieve traces, sessions, conversations, and workspace data
+- **Troubleshooting**: Debug telemetry issues and verify data collection
+- **Development Workflow**: Integrated server lifecycle management
+
+### Using the Skill
+
+Once installed, you can ask Claude questions like:
+
+- "Show me recent Claude Code traces from the database"
+- "What Cursor sessions are currently active?"
+- "Restart the Blueplane server and check its status"
+- "Query conversation data for this workspace"
+- "How many events have been captured today?"
+
+The skill contains detailed documentation about the database schema, query patterns, and server management commands. See [Blueplane Skill Documentation](./.claude/skills/blueplane/SKILL.md) for complete reference.
 
 ## Additional Resources
 

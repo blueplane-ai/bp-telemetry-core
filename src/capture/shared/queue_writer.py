@@ -25,6 +25,7 @@ except ImportError:
 
 from .config import Config
 from .event_schema import EventSchema
+from .redis_streams import TELEMETRY_DLQ_STREAM
 
 
 # Configure logging

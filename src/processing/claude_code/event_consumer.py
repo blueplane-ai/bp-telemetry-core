@@ -20,6 +20,7 @@ import redis
 from ..common.batch_manager import BatchManager
 from ..common.cdc_publisher import CDCPublisher
 from .raw_traces_writer import ClaudeRawTracesWriter
+from ...capture.shared.redis_streams import TELEMETRY_EVENTS_STREAM, TELEMETRY_DLQ_STREAM
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class ClaudeEventConsumer:
         redis_client: redis.Redis,
         claude_writer: ClaudeRawTracesWriter,
         cdc_publisher: CDCPublisher,
-        stream_name: str = "telemetry:events",
+        stream_name: str = TELEMETRY_EVENTS_STREAM,
         consumer_group: str = "processors",
         consumer_name: str = "claude-consumer-1",
         batch_size: int = 100,
@@ -83,7 +84,7 @@ class ClaudeEventConsumer:
         self.block_ms = block_ms
         self.max_retries = max_retries
         self.running = False
-        self.dlq_stream = "telemetry:dlq"
+        self.dlq_stream = TELEMETRY_DLQ_STREAM
         
         # Backpressure handling
         self.current_batch_size = batch_size  # Adaptive batch size
@@ -255,7 +256,7 @@ class ClaudeEventConsumer:
         # Extract events (skip None events from parse errors)
         events = []
         valid_message_ids = []
-        
+
         for msg in messages:
             if msg['event'] is not None:
                 event = msg['event']
@@ -626,11 +627,8 @@ class ClaudeEventConsumer:
 
         logger.info(f"Claude Code event consumer started: {self.consumer_name}")
 
-        iteration = 0
         while self.running:
             try:
-                iteration += 1
-                
                 # Check pending message count - prioritize if backlog is significant
                 pending_count = self._get_pending_count()
                 
