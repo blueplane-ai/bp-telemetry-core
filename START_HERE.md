@@ -185,7 +185,7 @@ python scripts/init_redis.py
 
 ```bash
 # Start the telemetry processing server
-python scripts/start_server.py
+python scripts/server_ctl.py start --daemon
 
 # The server will:
 # - Load configuration from ~/.blueplane/config.yaml (if exists) or config/config.yaml
@@ -204,7 +204,7 @@ python scripts/start_server.py
 python scripts/check_status.py
 
 # Or manually check:
-ps aux | grep start_server.py
+python scripts/server_ctl.py status --verbose
 redis-cli XLEN telemetry:events
 ```
 
@@ -220,7 +220,7 @@ Once everything is running, your telemetry data is being collected in the follow
 | **Redis Metrics**           | `localhost:6379`                                             | Real-time metrics and message queue     |
 | **Claude Code Sessions**    | `~/.claude/projects/<project>/<session-hash>.jsonl`          | Raw Claude Code transcripts             |
 | **Cursor Workspace Traces** | `~/Library/Application Support/Cursor/User/<workspace-hash>` | Raw Cursor Conversation Info            |
-| **Processing Logs**         | Console output from `start_server.py`                        | Server activity and errors on stdout    |
+| **Processing Logs**         | `~/.blueplane/server.log`                                    | Server activity and errors (daemon mode)|
 
 ### Accessing Your Data
 
@@ -347,7 +347,8 @@ ls -la ~/.claude/hooks/telemetry/*.py
 
 ```bash
 # Check server logs
-# Look for errors in the console where start_server.py is running
+# Look for errors in the server logs
+tail -f ~/.blueplane/server.log
 
 # Verify database exists
 ls -la ~/.blueplane/telemetry.db

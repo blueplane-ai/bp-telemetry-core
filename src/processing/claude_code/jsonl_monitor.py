@@ -122,8 +122,9 @@ class ClaudeCodeJSONLMonitor:
         self.running = True
         logger.info("Claude Code JSONL monitor started")
 
-        # Run monitoring loop directly (blocks until stopped)
-        await self._monitor_loop()
+        # Run monitoring loop as background task
+        asyncio.create_task(self._monitor_loop())
+        logger.info("JSONL monitor loop started in background")
 
     async def stop(self):
         """Stop JSONL file monitoring."""
@@ -463,9 +464,9 @@ class ClaudeCodeJSONLMonitor:
                 },
             }
 
-            # Send to Redis stream
+            # Send to Redis stream (use message_queue for main event processing)
             self.redis_client.xadd(
-                "telemetry:events",
+                "telemetry:message_queue",
                 {
                     k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
                     for k, v in event.items()

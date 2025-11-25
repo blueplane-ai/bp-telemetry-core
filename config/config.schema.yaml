@@ -189,6 +189,11 @@ streams:
       default: true
       description: "Use approximate trimming for better performance"
 
+    persist_after_ack:
+      type: boolean
+      default: false
+      description: "Keep messages in stream after ACK (for debugging). Set to true to retain messages, false to trim after processing."
+
   # Dead letter queue for failed messages
   dlq:
     retention_days:

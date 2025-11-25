@@ -35,7 +35,10 @@ class EventConsumer:
         redis_client: redis.Redis,
         stream_name: str = "telemetry:events",
         consumer_group: str = "processors",
-        consumer_name: Optional[str] = None
+        consumer_name: Optional[str] = None,
+        persist_after_ack: bool = False,
+        max_length: int = 10000,
+        trim_approximate: bool = True
     ):
         self.redis_client = redis_client
         self.stream_name = stream_name
@@ -45,16 +48,31 @@ class EventConsumer:
         self.claim_min_idle_time = 60000  # 60 seconds in milliseconds
         self.running = False
 
+        # Message retention configuration
+        self.persist_after_ack = persist_after_ack
+        self.max_length = max_length
+        self.trim_approximate = trim_approximate
+
         # Ensure consumer group exists
         self._ensure_consumer_group()
 
     def _ensure_consumer_group(self):
-        """Create consumer group if it doesn't exist."""
+        """
+        Create consumer group if it doesn't exist.
+
+        Uses id='0' to start from the beginning of the stream. This ensures:
+        - On first startup: Processes all existing messages in stream
+        - After restart/crash: Processes any unprocessed messages that weren't ACKed
+        - Normal operation: Only new messages (old ones are trimmed after ACK)
+
+        This is safe because trimming removes processed messages, so anything
+        in the stream on startup is guaranteed to be unprocessed.
+        """
         try:
             self.redis_client.xgroup_create(
                 self.stream_name,
                 self.consumer_group,
-                id='0',  # Start from beginning
+                id='0',  # Start from beginning - process unprocessed messages
                 mkstream=True  # Create stream if doesn't exist
             )
             logger.info(f"Created consumer group '{self.consumer_group}'")
@@ -104,6 +122,9 @@ class EventConsumer:
         """
         Acknowledge successful processing of events.
         This removes them from the Pending Entries List (PEL).
+
+        If persist_after_ack is False (default), also trims the stream to remove
+        processed messages and keep Redis memory usage low.
         """
         if not entry_ids:
             return
@@ -124,8 +145,31 @@ class EventConsumer:
                     "Some may have been already ACKed or don't exist."
                 )
 
+            # Trim stream after ACK (unless persistence is enabled)
+            if not self.persist_after_ack:
+                await self._trim_stream()
+
         except Exception as e:
             logger.error(f"Error acknowledging events: {e}")
+
+    async def _trim_stream(self):
+        """
+        Trim the stream to keep only recent messages.
+        This prevents Redis from growing unbounded with processed messages.
+        """
+        try:
+            # XTRIM with MAXLEN removes old messages
+            trimmed = self.redis_client.xtrim(
+                self.stream_name,
+                maxlen=self.max_length,
+                approximate=self.trim_approximate
+            )
+
+            if trimmed > 0:
+                logger.debug(f"Trimmed {trimmed} messages from stream '{self.stream_name}'")
+
+        except Exception as e:
+            logger.warning(f"Error trimming stream: {e}")
 
     async def process_pending_events(self) -> List[Tuple[str, dict]]:
         """

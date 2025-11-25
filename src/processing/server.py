@@ -212,14 +212,16 @@ class TelemetryServer:
         )
         
         # Create Claude Code event consumer
-        consumer_group = "processors"  # Standard consumer group for message queue
+        consumer_group = "claude_processors"  # Separate consumer group for Claude events
+        # Use PID-based consumer name to avoid conflicts with old/dead consumers
+        consumer_name = f"claude-consumer-{os.getpid()}"
         self.consumer = ClaudeEventConsumer(
             redis_client=self.redis_client,
             claude_writer=self.claude_writer,
             cdc_publisher=self.cdc_publisher,
             stream_name=stream_config.name,
             consumer_group=consumer_group,
-            consumer_name=f"{consumer_group}-1",
+            consumer_name=consumer_name,
             batch_size=stream_config.count,
             batch_timeout=stream_config.block_ms / 1000.0,
             block_ms=stream_config.block_ms,
@@ -569,7 +571,10 @@ class TelemetryServer:
                     try:
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
+                        # Start the JSONL monitor (creates background task)
                         loop.run_until_complete(self.claude_jsonl_monitor.start())
+                        # Keep event loop running for background tasks
+                        loop.run_forever()
                     except Exception as e:
                         logger.error(f"Claude Code JSONL monitor thread crashed: {e}", exc_info=True)
                 
@@ -603,11 +608,12 @@ class TelemetryServer:
                 # Set running flag
                 self.claude_code_monitor.running = True
                 # Ensure consumer group exists
+                # Uses id='0' to process unprocessed messages after restart (safe with trimming)
                 try:
                     self.redis_client.xgroup_create(
                         self.claude_code_monitor.stream_name,
                         self.claude_code_monitor.consumer_group,
-                        id='0',
+                        id='0',  # Start from beginning - process unprocessed messages
                         mkstream=True
                     )
                     logger.info("Created consumer group: %s", self.claude_code_monitor.consumer_group)
