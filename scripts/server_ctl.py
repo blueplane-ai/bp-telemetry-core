@@ -19,12 +19,28 @@ import argparse
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+try:
+    import redis
+    HAS_REDIS = True
+except ImportError:
+    HAS_REDIS = False
+
+try:
+    from src.capture.shared.config import Config
+    HAS_CONFIG = True
+except ImportError:
+    HAS_CONFIG = False
 
 
 class ServerController:
@@ -175,6 +191,196 @@ class ServerController:
             return True
 
         return False
+
+    def check_database_status(self) -> Dict[str, Any]:
+        """
+        Check database connection status.
+
+        Returns:
+            Dictionary with database status information
+        """
+        db_path = self.blueplane_home / "telemetry.db"
+        result = {
+            "path": str(db_path),
+            "exists": db_path.exists(),
+            "accessible": False,
+            "size_bytes": 0,
+            "tables": [],
+            "error": None,
+        }
+
+        if not db_path.exists():
+            return result
+
+        try:
+            result["size_bytes"] = db_path.stat().st_size
+
+            # Try to connect and query
+            conn = sqlite3.connect(str(db_path), timeout=2.0)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Get list of tables
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            )
+            tables = [row[0] for row in cursor.fetchall()]
+            result["tables"] = tables
+            result["accessible"] = True
+
+            # Get some stats if tables exist
+            stats = {}
+            for table in tables[:5]:  # Limit to first 5 tables
+                try:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                    count = cursor.fetchone()[0]
+                    stats[table] = count
+                except sqlite3.Error:
+                    stats[table] = "error"
+            result["table_counts"] = stats
+
+            conn.close()
+
+        except sqlite3.Error as e:
+            result["error"] = str(e)
+        except Exception as e:
+            result["error"] = str(e)
+
+        return result
+
+    def check_redis_status(self) -> Dict[str, Any]:
+        """
+        Check Redis connection status.
+
+        Returns:
+            Dictionary with Redis status information
+        """
+        result = {
+            "available": False,
+            "connected": False,
+            "host": "localhost",
+            "port": 6379,
+            "error": None,
+            "info": {},
+        }
+
+        if not HAS_REDIS:
+            result["error"] = "redis package not installed"
+            return result
+
+        # Load config if available
+        if HAS_CONFIG:
+            try:
+                config = Config()
+                redis_config = config.redis
+                result["host"] = redis_config.host
+                result["port"] = redis_config.port
+            except Exception as e:
+                result["error"] = f"Config load error: {e}"
+
+        result["available"] = True
+
+        try:
+            client = redis.Redis(
+                host=result["host"],
+                port=result["port"],
+                socket_timeout=2.0,
+                socket_connect_timeout=2.0,
+            )
+            # Test connection
+            client.ping()
+            result["connected"] = True
+
+            # Get basic info
+            info = client.info()
+            result["info"] = {
+                "redis_version": info.get("redis_version", "unknown"),
+                "connected_clients": info.get("connected_clients", 0),
+                "used_memory_human": info.get("used_memory_human", "unknown"),
+                "uptime_in_seconds": info.get("uptime_in_seconds", 0),
+            }
+
+            # Check for our streams
+            streams = {}
+            for stream_name in ["telemetry:message_queue", "telemetry:cdc"]:
+                try:
+                    length = client.xlen(stream_name)
+                    streams[stream_name] = {"length": length}
+                except redis.ResponseError:
+                    streams[stream_name] = {"length": 0, "exists": False}
+            result["streams"] = streams
+
+            client.close()
+
+        except redis.ConnectionError as e:
+            result["error"] = f"Connection failed: {e}"
+        except redis.TimeoutError as e:
+            result["error"] = f"Connection timeout: {e}"
+        except Exception as e:
+            result["error"] = str(e)
+
+        return result
+
+    def check_monitor_status(self) -> Dict[str, Any]:
+        """
+        Check which monitors are configured and their settings.
+
+        Returns:
+            Dictionary with monitor configuration information
+        """
+        result = {
+            "config_loaded": False,
+            "monitors": {},
+            "error": None,
+        }
+
+        if not HAS_CONFIG:
+            result["error"] = "Config module not available"
+            return result
+
+        try:
+            config = Config()
+            result["config_loaded"] = True
+
+            # Check each monitor's configuration
+            monitors = {
+                "cursor_database": {
+                    "name": "Cursor Database Monitor",
+                    "config_key": "cursor_database",
+                },
+                "cursor_markdown": {
+                    "name": "Cursor Markdown Monitor",
+                    "config_key": "cursor_markdown",
+                },
+                "unified_cursor": {
+                    "name": "Unified Cursor Monitor",
+                    "config_key": "unified_cursor",
+                },
+                "claude_jsonl": {
+                    "name": "Claude Code JSONL Monitor",
+                    "config_key": "claude_jsonl",
+                },
+            }
+
+            for key, info in monitors.items():
+                mon_config = config.get_monitoring_config(info["config_key"])
+                result["monitors"][key] = {
+                    "name": info["name"],
+                    "enabled": mon_config.get("enabled", True),  # Default is enabled
+                    "poll_interval": mon_config.get(
+                        "poll_interval", mon_config.get("poll_interval_seconds")
+                    ),
+                }
+
+            # Check feature flags
+            result["features"] = {
+                "duckdb_sink": config.get("features.duckdb_sink.enabled", False),
+            }
+
+        except Exception as e:
+            result["error"] = str(e)
+
+        return result
 
     def start(self, daemon: bool = False, verbose: bool = False) -> int:
         """
@@ -346,6 +552,14 @@ class ServerController:
         # Start
         return self.start(daemon=daemon, verbose=verbose)
 
+    def _format_size(self, size_bytes: int) -> str:
+        """Format bytes to human readable size."""
+        for unit in ["B", "KB", "MB", "GB"]:
+            if size_bytes < 1024:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024
+        return f"{size_bytes:.1f} TB"
+
     def status(self, verbose: bool = False) -> int:
         """
         Check server status.
@@ -360,64 +574,124 @@ class ServerController:
         pid_info = self.get_pid_info()
 
         if not pid_info:
-            print("Status: NOT RUNNING (no PID file)")
-            return 1
+            print("Server Status: NOT RUNNING (no PID file)")
+            server_running = False
+            exit_code = 1
+        elif not self.is_process_running(pid_info["pid"]):
+            print(f"Server Status: NOT RUNNING (stale PID {pid_info['pid']})")
+            server_running = False
+            exit_code = 1
+        elif self.is_stale_pid(pid_info):
+            print(f"Server Status: NOT RUNNING (PID {pid_info['pid']} is wrong process)")
+            server_running = False
+            exit_code = 1
+        else:
+            pid = pid_info["pid"]
+            print(f"Server Status: RUNNING (PID {pid})")
+            server_running = True
+            exit_code = 0
 
-        pid = pid_info["pid"]
-
-        # Check if process is running
-        if not self.is_process_running(pid):
-            print(f"Status: NOT RUNNING (stale PID {pid})")
             if verbose:
                 print(f"  PID file: {self.pid_file}")
-                print(f"  Cleanup required: yes")
-            return 1
+                if pid_info["timestamp"]:
+                    print(f"  Started: {pid_info['timestamp']}")
+                print(f"  Log file: {self.log_file}")
 
-        # Check if it's our process
-        if self.is_stale_pid(pid_info):
-            print(f"Status: NOT RUNNING (PID {pid} is wrong process)")
+                # Show uptime
+                try:
+                    result = subprocess.run(
+                        ["ps", "-p", str(pid), "-o", "etime="],
+                        capture_output=True,
+                        text=True,
+                        timeout=2
+                    )
+                    if result.returncode == 0:
+                        print(f"  Uptime: {result.stdout.strip()}")
+                except Exception:
+                    pass
+
+        # Always show component status (even if server not running)
+        print("")
+
+        # Database status
+        print("Database:")
+        db_status = self.check_database_status()
+        if db_status["exists"]:
+            if db_status["accessible"]:
+                size_str = self._format_size(db_status["size_bytes"])
+                table_count = len(db_status.get("tables", []))
+                print(f"  Status: OK ({size_str}, {table_count} tables)")
+                if verbose and db_status.get("table_counts"):
+                    for table, count in db_status["table_counts"].items():
+                        print(f"    - {table}: {count} rows")
+            else:
+                print(f"  Status: ERROR - {db_status.get('error', 'unknown error')}")
+        else:
+            print(f"  Status: NOT FOUND ({db_status['path']})")
+        print(f"  Path: {db_status['path']}")
+
+        # Redis status
+        print("")
+        print("Redis:")
+        redis_status = self.check_redis_status()
+        if redis_status["connected"]:
+            info = redis_status.get("info", {})
+            print(f"  Status: CONNECTED (v{info.get('redis_version', '?')})")
+            print(f"  Host: {redis_status['host']}:{redis_status['port']}")
             if verbose:
-                print(f"  PID file: {self.pid_file}")
-                print(f"  Cleanup required: yes")
-            return 1
+                print(f"  Memory: {info.get('used_memory_human', 'unknown')}")
+                print(f"  Clients: {info.get('connected_clients', 0)}")
+                uptime = info.get("uptime_in_seconds", 0)
+                if uptime:
+                    hours = uptime // 3600
+                    minutes = (uptime % 3600) // 60
+                    print(f"  Uptime: {hours}h {minutes}m")
 
-        # Server is running
-        print(f"Status: RUNNING (PID {pid})")
+            # Show stream info
+            streams = redis_status.get("streams", {})
+            if streams:
+                print("  Streams:")
+                for stream_name, stream_info in streams.items():
+                    short_name = stream_name.split(":")[-1]
+                    if stream_info.get("exists") is False:
+                        print(f"    - {short_name}: not created")
+                    else:
+                        print(f"    - {short_name}: {stream_info.get('length', 0)} messages")
+        elif redis_status["available"]:
+            print(f"  Status: NOT CONNECTED")
+            print(f"  Host: {redis_status['host']}:{redis_status['port']}")
+            if redis_status.get("error"):
+                print(f"  Error: {redis_status['error']}")
+        else:
+            print(f"  Status: UNAVAILABLE")
+            if redis_status.get("error"):
+                print(f"  Error: {redis_status['error']}")
 
-        if verbose:
-            print(f"  PID: {pid}")
-            print(f"  PID file: {self.pid_file}")
-            if pid_info["timestamp"]:
-                print(f"  Started: {pid_info['timestamp']}")
-            print(f"  Log file: {self.log_file}")
+        # Monitor configuration status
+        print("")
+        print("Monitors:")
+        monitor_status = self.check_monitor_status()
+        if monitor_status["config_loaded"]:
+            for key, info in monitor_status.get("monitors", {}).items():
+                status = "enabled" if info.get("enabled", True) else "disabled"
+                interval = info.get("poll_interval")
+                interval_str = f" (poll: {interval}s)" if interval else ""
+                print(f"  - {info['name']}: {status}{interval_str}")
 
-            # Show command line
-            try:
-                result = subprocess.run(
-                    ["ps", "-p", str(pid), "-o", "args="],
-                    capture_output=True,
-                    text=True,
-                    timeout=2
-                )
-                if result.returncode == 0:
-                    print(f"  Command: {result.stdout.strip()}")
-            except Exception:
-                pass
+            if verbose:
+                features = monitor_status.get("features", {})
+                if features:
+                    print("  Features:")
+                    for feature, enabled in features.items():
+                        status = "enabled" if enabled else "disabled"
+                        print(f"    - {feature}: {status}")
+        else:
+            if monitor_status.get("error"):
+                print(f"  Error loading config: {monitor_status['error']}")
+            else:
+                print("  Config not available")
 
-            # Show uptime
-            try:
-                result = subprocess.run(
-                    ["ps", "-p", str(pid), "-o", "etime="],
-                    capture_output=True,
-                    text=True,
-                    timeout=2
-                )
-                if result.returncode == 0:
-                    print(f"  Uptime: {result.stdout.strip()}")
-            except Exception:
-                pass
-
-        return 0
+        return exit_code
 
 
 def main():
