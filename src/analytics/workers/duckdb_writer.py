@@ -126,15 +126,17 @@ class DuckDBWriter:
         """)
         
         # Raw traces table (for reference and debugging)
+        # Use composite primary key (trace_sequence, platform) to allow same sequence across platforms
         self._connection.execute("""
             CREATE TABLE IF NOT EXISTS raw_traces (
-                trace_sequence INTEGER PRIMARY KEY,
+                trace_sequence INTEGER NOT NULL,
                 platform VARCHAR NOT NULL,
                 event_id VARCHAR NOT NULL,
                 workspace_hash VARCHAR NOT NULL,
                 event_type VARCHAR NOT NULL,
                 timestamp TIMESTAMP NOT NULL,
-                ingested_at TIMESTAMP
+                ingested_at TIMESTAMP,
+                PRIMARY KEY (trace_sequence, platform)
             )
         """)
         
@@ -328,7 +330,13 @@ class DuckDBWriter:
         
         # Batch insert all data
         try:
-            # Update workspaces
+            # Update workspaces (count traces per workspace)
+            workspace_trace_counts = {}
+            for trace in traces:
+                workspace_hash = trace.get('workspace_hash')
+                if workspace_hash:
+                    workspace_trace_counts[workspace_hash] = workspace_trace_counts.get(workspace_hash, 0) + 1
+            
             for workspace_hash in workspaces_to_update:
                 # Try to get workspace_path from traces
                 workspace_path = ''
@@ -341,13 +349,15 @@ class DuckDBWriter:
                 if not workspace_path:
                     workspace_path = workspace_hash  # Fallback
                 
+                trace_count = workspace_trace_counts.get(workspace_hash, 1)
+                now = datetime.now()
                 self._connection.execute("""
                     INSERT INTO workspaces (workspace_hash, workspace_path, first_seen, last_seen, total_traces)
-                    VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)
+                    VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT (workspace_hash) DO UPDATE SET
-                        last_seen = CURRENT_TIMESTAMP,
-                        total_traces = workspaces.total_traces + 1
-                """, (workspace_hash, workspace_path))
+                        last_seen = ?,
+                        total_traces = workspaces.total_traces + ?
+                """, (workspace_hash, workspace_path, now, now, trace_count, now, trace_count))
             
             # Insert raw traces
             if raw_traces_to_insert:
@@ -419,6 +429,7 @@ class DuckDBWriter:
                 logger.debug(f"Inserted {len(raw_traces_to_insert)} Claude Code traces")
             except Exception as e:
                 logger.error(f"Error writing Claude traces: {e}", exc_info=True)
+                raise  # Re-raise to see errors in tests
 
     def write_conversations(self, conversations: List[Dict[str, Any]]) -> None:
         """
@@ -451,13 +462,14 @@ class DuckDBWriter:
         if self._connection is None:
             self.connect()
         
+        now = datetime.now()
         self._connection.execute("""
             INSERT INTO workspaces (workspace_hash, workspace_path, first_seen, last_seen, total_traces)
-            VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+            VALUES (?, ?, ?, ?, 0)
             ON CONFLICT (workspace_hash) DO UPDATE SET
                 workspace_path = EXCLUDED.workspace_path,
-                last_seen = CURRENT_TIMESTAMP
-        """, (workspace_hash, workspace_path))
+                last_seen = ?
+        """, (workspace_hash, workspace_path, now, now, now))
 
     def close(self) -> None:
         """Close DuckDB connection."""

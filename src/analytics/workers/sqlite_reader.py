@@ -107,47 +107,83 @@ class SQLiteReader:
         Returns:
             List of trace dictionaries with decompressed event_data
         """
-        table_name = f"{platform}_raw_traces"
+        # Map platform names to table names
+        table_name_map = {
+            'cursor': 'cursor_raw_traces',
+            'claude_code': 'claude_raw_traces'
+        }
+        table_name = table_name_map.get(platform)
+        if not table_name:
+            raise ValueError(f"Unknown platform: {platform}")
         
         with self.client.get_connection() as conn:
-            cursor = conn.execute(f"""
-                SELECT 
-                    sequence,
-                    event_id,
-                    external_id,
-                    external_session_id,
-                    event_type,
-                    timestamp,
-                    workspace_hash,
-                    event_data
-                FROM {table_name}
-                WHERE sequence > ?
-                ORDER BY sequence ASC
-                LIMIT ?
-            """, (since_sequence, limit))
+            # Different columns for different platforms
+            if platform == 'cursor':
+                cursor = conn.execute(f"""
+                    SELECT 
+                        sequence,
+                        event_id,
+                        external_session_id,
+                        event_type,
+                        timestamp,
+                        workspace_hash,
+                        event_data
+                    FROM {table_name}
+                    WHERE sequence > ?
+                    ORDER BY sequence ASC
+                    LIMIT ?
+                """, (since_sequence, limit))
+            else:  # claude_code
+                cursor = conn.execute(f"""
+                    SELECT 
+                        sequence,
+                        event_id,
+                        external_id,
+                        event_type,
+                        timestamp,
+                        workspace_hash,
+                        event_data
+                    FROM {table_name}
+                    WHERE sequence > ?
+                    ORDER BY sequence ASC
+                    LIMIT ?
+                """, (since_sequence, limit))
             
             traces = []
             for row in cursor.fetchall():
                 try:
-                    # Decompress event_data
-                    compressed_data = row[7]  # event_data BLOB
+                    # Decompress event_data (always last column)
+                    compressed_data = row[-1]  # event_data BLOB
                     if compressed_data:
                         decompressed = zlib.decompress(compressed_data)
                         event_data = json.loads(decompressed.decode('utf-8'))
                     else:
                         event_data = {}
                     
-                    trace = {
-                        'sequence': row[0],
-                        'event_id': row[1],
-                        'external_id': row[2] if platform == 'claude_code' else None,
-                        'external_session_id': row[3] if platform == 'cursor' else None,
-                        'event_type': row[4],
-                        'timestamp': row[5],
-                        'workspace_hash': row[6],
-                        'event_data': event_data,
-                        'platform': platform
-                    }
+                    if platform == 'cursor':
+                        trace = {
+                            'sequence': row[0],
+                            'event_id': row[1],
+                            'external_id': None,
+                            'external_session_id': row[2],
+                            'event_type': row[3],
+                            'timestamp': row[4],
+                            'workspace_hash': row[5],
+                            'event_data': event_data,
+                            'platform': platform
+                        }
+                    else:  # claude_code
+                        trace = {
+                            'sequence': row[0],
+                            'event_id': row[1],
+                            'external_id': row[2],
+                            'external_session_id': None,
+                            'event_type': row[3],
+                            'timestamp': row[4],
+                            'workspace_hash': row[5],
+                            'event_data': event_data,
+                            'platform': platform
+                        }
                     traces.append(trace)
                 except Exception as e:
                     logger.error(f"Error decompressing trace sequence {row[0]}: {e}")
