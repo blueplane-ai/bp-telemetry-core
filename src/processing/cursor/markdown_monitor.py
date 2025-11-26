@@ -5,6 +5,9 @@
 """
 Cursor Markdown History Monitor.
 
+DEPRECATED: This module is deprecated and will be removed in a future release.
+Use the analytics service instead for queryable analytics.
+
 Watches Cursor workspace databases and writes Markdown history files.
 """
 
@@ -24,17 +27,17 @@ from .markdown_writer import CursorMarkdownWriter, TRACE_RELEVANT_KEYS
 
 logger = logging.getLogger(__name__)
 
-# Optional DuckDB support
-try:
-    from .duckdb_writer import CursorDuckDBWriter, DUCKDB_AVAILABLE
-except ImportError:
-    DUCKDB_AVAILABLE = False
-    CursorDuckDBWriter = None
+# DuckDB support removed - use analytics service instead
+DUCKDB_AVAILABLE = False
+CursorDuckDBWriter = None
 
 
 class CursorMarkdownMonitor:
     """
     Monitor Cursor workspace databases and write Markdown history files.
+    
+    DEPRECATED: This class is deprecated and will be removed in a future release.
+    Use the analytics service instead for queryable analytics.
     
     Uses file watching with polling fallback for reliability.
     Implements debounce to avoid excessive writes.
@@ -70,20 +73,14 @@ class CursorMarkdownMonitor:
         self.debounce_delay = debounce_delay
         self.query_timeout = query_timeout
         
-        # Optional DuckDB support
-        self.enable_duckdb = enable_duckdb and DUCKDB_AVAILABLE
-        self.duckdb_writer: Optional[CursorDuckDBWriter] = None
-        
-        if self.enable_duckdb:
-            if DUCKDB_AVAILABLE:
-                self.duckdb_writer = CursorDuckDBWriter(duckdb_path)
-                logger.info("DuckDB sink enabled")
-            else:
-                logger.warning(
-                    "DuckDB sink requested but DuckDB not available. "
-                    "Install with: pip install duckdb>=0.9.0"
-                )
-                self.enable_duckdb = False
+        # DuckDB support removed - use analytics service instead
+        if enable_duckdb:
+            logger.warning(
+                "DuckDB sink via markdown monitor is deprecated. "
+                "Use the analytics service instead (enable via config: analytics.enabled=true)"
+            )
+        self.enable_duckdb = False
+        self.duckdb_writer = None
         
         # Track last written state per workspace
         self.last_data_hash: Dict[str, str] = {}  # workspace_hash -> data hash
@@ -123,12 +120,7 @@ class CursorMarkdownMonitor:
                 pass
         self.db_connections.clear()
         
-        # Close DuckDB connection
-        if self.duckdb_writer:
-            try:
-                self.duckdb_writer.close()
-            except:
-                pass
+        # DuckDB connection removed (use analytics service instead)
         
         logger.info("Markdown monitor stopped")
 
@@ -369,20 +361,7 @@ class CursorMarkdownMonitor:
                 timestamp
             )
             
-            # Write to DuckDB if enabled
-            if self.enable_duckdb and self.duckdb_writer:
-                try:
-                    self.duckdb_writer.write_workspace_history(
-                        workspace_hash,
-                        workspace_path,
-                        data,
-                        data_hash,
-                        timestamp,
-                        filepath
-                    )
-                    logger.info(f"Wrote workspace snapshot to DuckDB for {workspace_hash}")
-                except Exception as e:
-                    logger.error(f"Error writing to DuckDB for workspace {workspace_hash}: {e}")
+            # DuckDB writing removed - use analytics service instead
             
             # Update last hash
             self.last_data_hash[workspace_hash] = data_hash

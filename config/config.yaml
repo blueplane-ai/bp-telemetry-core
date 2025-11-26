@@ -192,4 +192,16 @@ http_endpoint:
 # =============================================================================
 features:
   duckdb_sink:
-    enabled: false
+    enabled: false  # DEPRECATED: Use analytics service instead
+
+# =============================================================================
+# ANALYTICS SERVICE
+# =============================================================================
+analytics:
+  enabled: false  # Enable analytics service (reads from SQLite, writes to DuckDB)
+  processing_interval: 300  # seconds (5 minutes default)
+  batch_size: 1000  # traces per batch
+  sqlite:
+    db_path: "~/.blueplane/telemetry.db"  # Uses paths.database.telemetry_db if not specified
+  duckdb:
+    db_path: "~/.blueplane/analytics.duckdb"  # DuckDB analytics database path

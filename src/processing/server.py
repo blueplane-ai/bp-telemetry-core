@@ -38,6 +38,7 @@ from .claude_code.session_timeout import SessionTimeoutManager
 from .http_endpoint import HTTPEndpoint
 from ..capture.shared.config import Config
 from ..capture.shared.queue_writer import MessageQueueWriter
+from ..analytics.service import AnalyticsService
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ class TelemetryServer:
         self.claude_timeout_manager: Optional[SessionTimeoutManager] = None
         self.http_endpoint: Optional[HTTPEndpoint] = None
         self.queue_writer: Optional[MessageQueueWriter] = None
+        self.analytics_service: Optional[AnalyticsService] = None
         self.running = False
         self.monitor_threads: list[threading.Thread] = []
 
@@ -306,13 +308,11 @@ class TelemetryServer:
 
     def _initialize_markdown_monitor(self) -> None:
         """Initialize Cursor Markdown History monitor."""
-        # Load monitoring and feature config
+        # Load monitoring config
         markdown_config = self.config.get_monitoring_config("cursor_markdown")
-        duckdb_config = self.config.get("features.duckdb_sink", {})
+        markdown_enabled = markdown_config.get("enabled", True)
 
-        enabled = markdown_config.get("enabled", True)
-
-        if not enabled:
+        if not markdown_enabled:
             logger.info("Cursor Markdown History monitoring is disabled")
             return
 
@@ -321,36 +321,35 @@ class TelemetryServer:
             logger.warning("Session monitor not initialized, cannot start Markdown monitor")
             return
 
-        logger.info("Initializing Cursor Markdown History monitor")
+        logger.warning(
+            "Cursor Markdown History monitor is DEPRECATED. "
+            "Markdown export will be removed in a future release. "
+            "Use the analytics service instead for queryable analytics."
+        )
+
+        logger.info("Initializing Cursor Markdown History monitor (DEPRECATED)")
 
         # Get output directory from config
         output_dir = markdown_config.get("output_dir")
         if output_dir:
             output_dir = Path(output_dir)
         
-        # Get DuckDB settings
-        enable_duckdb = duckdb_config.get("enabled", False)
-        duckdb_path = duckdb_config.get("database_path")
-        if duckdb_path:
-            duckdb_path = Path(duckdb_path)
-        
-        # Create markdown monitor
+        # Create markdown monitor (DuckDB integration removed - use analytics service instead)
         self.markdown_monitor = CursorMarkdownMonitor(
             session_monitor=self.session_monitor,
             output_dir=output_dir,
             poll_interval=markdown_config.get("poll_interval_seconds", 120.0),
             debounce_delay=markdown_config.get("debounce_delay_seconds", 10.0),
             query_timeout=markdown_config.get("query_timeout_seconds", 1.5),
-            enable_duckdb=enable_duckdb,
-            duckdb_path=duckdb_path,
+            enable_duckdb=False,  # Disabled - use analytics service instead
+            duckdb_path=None,
         )
 
         logger.info(
-            f"Cursor Markdown History monitor initialized "
+            f"Cursor Markdown History monitor initialized (DEPRECATED) "
             f"(output_dir={output_dir or 'workspace/.history/'}, "
             f"poll_interval={markdown_config.get('poll_interval_seconds', 120)}s, "
-            f"debounce={markdown_config.get('debounce_delay_seconds', 10)}s, "
-            f"duckdb_enabled={enable_duckdb})"
+            f"debounce={markdown_config.get('debounce_delay_seconds', 10)}s)"
         )
 
     def _initialize_unified_cursor_monitor(self) -> None:
@@ -446,6 +445,21 @@ class TelemetryServer:
 
         logger.info("Claude Code monitors initialized")
 
+    def _initialize_analytics_service(self) -> None:
+        """Initialize analytics service."""
+        analytics_config = self.config.get("analytics", {})
+        enabled = analytics_config.get("enabled", False)
+
+        if not enabled:
+            logger.info("Analytics service is disabled")
+            return
+
+        logger.info("Initializing analytics service")
+        
+        self.analytics_service = AnalyticsService(config=self.config)
+        
+        logger.info("Analytics service initialized")
+
     async def _log_metrics_periodically(self):
         """Log metrics periodically."""
         import asyncio
@@ -480,6 +494,7 @@ class TelemetryServer:
             self._initialize_markdown_monitor()
             self._initialize_unified_cursor_monitor()
             self._initialize_claude_code_monitor()
+            self._initialize_analytics_service()
 
             # Start HTTP endpoint (if enabled)
             if self.http_endpoint:
@@ -671,6 +686,27 @@ class TelemetryServer:
                 self.monitor_threads.append(claude_thread)
                 logger.info("Claude Code transcript monitor started")
 
+            # Start analytics service (if enabled)
+            if self.analytics_service:
+                def run_analytics_service():
+                    import asyncio
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(self.analytics_service.start())
+                        # Keep running
+                        while True:
+                            loop.run_until_complete(asyncio.sleep(1))
+                    except Exception as e:
+                        logger.error(f"Analytics service thread crashed: {e}", exc_info=True)
+
+                analytics_thread = threading.Thread(target=run_analytics_service, daemon=True)
+                analytics_thread.start()
+                self.monitor_threads.append(analytics_thread)
+                logger.info("Analytics service started")
+
             # Start consumer (this blocks)
             self.running = True
             self.consumer.run()
@@ -731,6 +767,12 @@ class TelemetryServer:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self.claude_code_monitor.stop())
+
+        if self.analytics_service:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.analytics_service.stop())
 
         if self.markdown_monitor:
             import asyncio

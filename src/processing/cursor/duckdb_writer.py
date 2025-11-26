@@ -5,10 +5,11 @@
 """
 DuckDB Sink for Cursor Workspace History.
 
-STUB IMPLEMENTATION - Scaffolded for M4, not yet fully functional.
+DEPRECATED: This module is deprecated and will be removed in a future release.
+Use src.analytics.workers.duckdb_writer.DuckDBWriter instead.
 
-This module provides a DuckDB sink for storing workspace history data
-in a queryable analytics database. Currently behind a feature flag.
+This module provided a DuckDB sink for storing workspace history data
+in a queryable analytics database. It has been replaced by the analytics service.
 """
 
 import json

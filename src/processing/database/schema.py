@@ -500,6 +500,27 @@ def create_indexes(client: SQLiteClient) -> None:
     logger.info("Created database indexes")
 
 
+def create_analytics_processing_state_table(client: SQLiteClient) -> None:
+    """
+    Create analytics_processing_state table for tracking analytics processing.
+
+    Args:
+        client: SQLiteClient instance
+    """
+    sql = """
+    CREATE TABLE IF NOT EXISTS analytics_processing_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        platform TEXT NOT NULL,
+        last_processed_sequence INTEGER NOT NULL DEFAULT 0,
+        last_processed_timestamp TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(platform)
+    );
+    """
+    client.execute(sql)
+    logger.info("Created analytics_processing_state table")
+
+
 def create_schema(client: SQLiteClient) -> None:
     """
     Create all database tables and indexes.
@@ -516,6 +537,7 @@ def create_schema(client: SQLiteClient) -> None:
     create_cursor_sessions_table(client)
     create_conversations_table(client)
     create_trace_stats_table(client)
+    create_analytics_processing_state_table(client)
 
     # Create indexes
     create_indexes(client)
