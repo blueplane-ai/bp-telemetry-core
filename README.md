@@ -22,7 +22,7 @@ Blueplane Telemetry Core is an open-source system for capturing, processing, and
 - **Real-Time Analytics**: Sub-second metrics updates with async processing pipeline
 - **Rich Insights**: Track acceptance rates, productivity, tool usage, and conversation patterns
 - **Zero Configuration**: Embedded databases (SQLite, Redis) with minimal setup required
-- **Multiple Interfaces**: CLI, MCP Server, and Web Dashboard for accessing your data
+- **Multiple Interfaces**: CLI, MCP Server, and Web Dashboard for accessing your data (in development)
 
 ## Architecture
 
@@ -30,7 +30,7 @@ Blueplane Telemetry Core is built on a three-layer architecture:
 
 - **Layer 1: Capture** - Lightweight hooks and monitors that capture telemetry events from IDEs
 - **Layer 2: Processing** - High-performance async pipeline for event processing and storage
-- **Layer 3: Interfaces** - CLI, MCP Server, and Dashboard for data access and visualization
+- **Layer 3: Interfaces** - CLI, MCP Server, and Dashboard for data access and visualization (in development)
 
 See [Architecture Overview](./docs/ARCHITECTURE.md) for detailed information.
 
@@ -71,7 +71,7 @@ npm run compile
 # Database monitoring is handled by the Python processing server (step 8).
 
 # 7. Configure Cursor for telemetry
-# In Cursor: Open Command Palette (Cmd+Shift+P / Ctrl+Shift+P)
+# In Cursor: Open Command Palette (Cmd+Shift+P)
 # Run: "Developer: Set Log Level" → Select "Trace"
 # This enables detailed logging (optional, for debugging)
 
@@ -209,13 +209,15 @@ High-performance async pipeline for event processing:
 
 [Learn more →](./docs/architecture/layer2_async_pipeline.md)
 
-### Layer 3: Interfaces
+### Layer 3: Interfaces ⏳ (Pending Development)
 
-Multiple ways to access your telemetry data:
+Multiple ways to access your telemetry data (all interfaces are currently in development):
 
-- **CLI**: Rich terminal interface with tables and charts
-- **MCP Server**: Enable AI assistants to become telemetry-aware
+- **CLI**: Rich terminal interface with tables and charts (coming soon)
+- **MCP Server**: Enable AI assistants to become telemetry-aware (coming soon)
 - **Dashboard**: Web-based visualization and analytics (coming soon)
+
+**Current Status**: Layer 3 interfaces are pending development. Currently, you can access telemetry data directly via SQLite queries and Redis CLI commands.
 
 [Learn more →](./docs/architecture/layer3_cli_interface.md)
 
@@ -327,6 +329,7 @@ cp -r .claude/skills/blueplane ~/.claude/skills/
 - **Development Workflow**: Integrated server lifecycle management during development
 
 Once installed, you can ask Claude to:
+
 - "Show me recent Claude Code traces"
 - "What Cursor sessions are in the database?"
 - "Restart the Blueplane server"

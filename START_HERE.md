@@ -116,6 +116,16 @@ cursor --install-extension ./blueplane-cursor-telemetry-0.1.0.vsix
    - `Blueplane: Stop Current Session`
 6. Alternatively, look for "Blueplane" on the bottom right corner in your extension status bar
 
+### 3.4 Configure Cursor Log Level
+
+To ensure detailed traces are being captured, set your log level to Trace:
+
+1. Open Command Palette (Cmd+Shift+P on macOS, Ctrl+Shift+P on Windows/Linux)
+2. Type and select: `Developer: Set Log Level`
+3. Select: `Trace`
+
+This enables detailed logging that can help diagnose issues with the extension or telemetry capture.
+
 ## Step 4: Configuration (Optional)
 
 Blueplane Telemetry Core uses a unified YAML configuration system. The default configuration (`config/config.yaml`) works out of the box, but you can customize settings by creating a user config file.
@@ -214,13 +224,13 @@ Once everything is running, your telemetry data is being collected in the follow
 
 ### Data Locations
 
-| Component                   | Location                                                     | Description                             |
-| --------------------------- | ------------------------------------------------------------ | --------------------------------------- |
-| **Main Database**           | `~/.blueplane/telemetry.db`                                  | SQLite database with all telemetry data |
-| **Redis Metrics**           | `localhost:6379`                                             | Real-time metrics and message queue     |
-| **Claude Code Sessions**    | `~/.claude/projects/<project>/<session-hash>.jsonl`          | Raw Claude Code transcripts             |
-| **Cursor Workspace Traces** | `~/Library/Application Support/Cursor/User/<workspace-hash>` | Raw Cursor Conversation Info            |
-| **Processing Logs**         | `~/.blueplane/server.log`                                    | Server activity and errors (daemon mode)|
+| Component                   | Location                                                     | Description                              |
+| --------------------------- | ------------------------------------------------------------ | ---------------------------------------- |
+| **Main Database**           | `~/.blueplane/telemetry.db`                                  | SQLite database with all telemetry data  |
+| **Redis Metrics**           | `localhost:6379`                                             | Real-time metrics and message queue      |
+| **Claude Code Sessions**    | `~/.claude/projects/<project>/<session-hash>.jsonl`          | Raw Claude Code transcripts              |
+| **Cursor Workspace Traces** | `~/Library/Application Support/Cursor/User/<workspace-hash>` | Raw Cursor Conversation Info             |
+| **Processing Logs**         | `~/.blueplane/server.log`                                    | Server activity and errors (daemon mode) |
 
 ### Accessing Your Data
 
