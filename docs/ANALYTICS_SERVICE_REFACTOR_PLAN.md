@@ -68,18 +68,18 @@ src/
 ```
 
 **Tasks:**
-- [ ] Create `src/analytics/` directory structure
-- [ ] Move `duckdb_writer.py` to `src/analytics/workers/duckdb_writer.py`
-- [ ] Update imports and references
-- [ ] Add deprecation warnings to markdown components
+- [X] Create `src/analytics/` directory structure
+- [X] Move `duckdb_writer.py` to `src/analytics/workers/duckdb_writer.py`
+- [X] Update imports and references
+- [X] Add deprecation warnings to markdown components
 
 #### 1.2 Deprecate Markdown Writing
 
 **Tasks:**
-- [ ] Add deprecation warnings to `CursorMarkdownWriter` and `CursorMarkdownMonitor`
-- [ ] Document deprecation in code comments
-- [ ] Update `server.py` to optionally disable markdown monitor
-- [ ] Keep markdown code for now (remove in future PR)
+- [X] Add deprecation warnings to `CursorMarkdownWriter` and `CursorMarkdownMonitor`
+- [X] Document deprecation in code comments
+- [X] Update `server.py` to optionally disable markdown monitor
+- [X] Keep markdown code for now (remove in future PR)
 
 **Deprecation Strategy:**
 - Mark as deprecated but keep functional
@@ -120,10 +120,10 @@ class SQLiteReader:
 - Handle both Cursor and Claude Code traces
 
 **Tasks:**
-- [ ] Implement `SQLiteReader` class
-- [ ] Add sequence tracking table: `analytics_processing_state`
-- [ ] Implement incremental reading (process only new data)
-- [ ] Add error handling and retry logic
+- [X] Implement `SQLiteReader` class
+- [X] Add sequence tracking table: `analytics_processing_state`
+- [X] Implement incremental reading (process only new data)
+- [X] Add error handling and retry logic
 - [ ] Add tests for SQLite reading
 
 #### 2.2 Create Processing State Tracking
@@ -148,9 +148,9 @@ CREATE TABLE analytics_processing_state (
 - Support resume after restart
 
 **Tasks:**
-- [ ] Add schema migration for `analytics_processing_state` table
-- [ ] Implement state tracking in SQLiteReader
-- [ ] Add checkpoint/commit logic
+- [X] Add schema migration for `analytics_processing_state` table
+- [X] Implement state tracking in SQLiteReader
+- [X] Add checkpoint/commit logic
 
 ### Phase 3: Refactor DuckDB Writer
 
@@ -182,11 +182,11 @@ class DuckDBWriter:
 - Map conversations from SQLite → DuckDB
 
 **Tasks:**
-- [ ] Refactor `write_workspace_history()` → `write_traces()`
-- [ ] Update data extraction to work with SQLite format
-- [ ] Remove ItemTable parsing logic
-- [ ] Add batch processing support
-- [ ] Update schema if needed
+- [X] Refactor `write_workspace_history()` → `write_traces()`
+- [X] Update data extraction to work with SQLite format
+- [X] Remove ItemTable parsing logic
+- [X] Add batch processing support
+- [X] Update schema if needed
 
 #### 3.2 Update DuckDB Schema
 
@@ -197,10 +197,10 @@ class DuckDBWriter:
 - Add indexes for analytics queries
 
 **Tasks:**
-- [ ] Review current DuckDB schema
-- [ ] Map SQLite fields to DuckDB fields
-- [ ] Add any missing fields
-- [ ] Update schema migration logic
+- [X] Review current DuckDB schema
+- [X] Map SQLite fields to DuckDB fields
+- [X] Add any missing fields
+- [X] Update schema migration logic
 
 ### Phase 4: Analytics Service Implementation
 
@@ -238,9 +238,9 @@ class AnalyticsService:
 ```
 
 **Tasks:**
-- [ ] Implement `AnalyticsService` class
-- [ ] Add configuration for processing interval
-- [ ] Add error handling and logging
+- [X] Implement `AnalyticsService` class
+- [X] Add configuration for processing interval
+- [X] Add error handling and logging
 - [ ] Add health check endpoints (future)
 - [ ] Add metrics/observability
 
@@ -255,10 +255,10 @@ class AnalyticsService:
 - Add config flag: `features.analytics_service.enabled`
 
 **Tasks:**
-- [ ] Remove DuckDB integration from `CursorMarkdownMonitor`
-- [ ] Add analytics service initialization
-- [ ] Add config options for analytics service
-- [ ] Update server startup/shutdown logic
+- [X] Remove DuckDB integration from `CursorMarkdownMonitor`
+- [X] Add analytics service initialization
+- [X] Add config options for analytics service
+- [X] Update server startup/shutdown logic
 
 ### Phase 5: Configuration & Testing
 
@@ -280,7 +280,7 @@ analytics:
 ```
 
 **Tasks:**
-- [ ] Add analytics configuration section
+- [X] Add analytics configuration section
 - [ ] Update config schema
 - [ ] Add validation
 
@@ -318,10 +318,10 @@ analytics:
 #### 6.2 Code Cleanup
 
 **Tasks:**
-- [ ] Remove unused imports
-- [ ] Update docstrings
-- [ ] Add type hints
-- [ ] Run linters and fix issues
+- [X] Remove unused imports
+- [X] Update docstrings
+- [X] Add type hints
+- [X] Run linters and fix issues
 - [ ] Update CHANGELOG
 
 ## Migration Strategy

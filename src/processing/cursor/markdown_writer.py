@@ -6,7 +6,6 @@
 Cursor Markdown History Writer.
 
 DEPRECATED: This module is deprecated and will be removed in a future release.
-Use the analytics service instead for queryable analytics.
 
 Writes workspace history to Markdown files by reading from Cursor's ItemTable.
 """
@@ -37,7 +36,6 @@ class CursorMarkdownWriter:
     Writes Cursor workspace history to Markdown files.
     
     DEPRECATED: This class is deprecated and will be removed in a future release.
-    Use the analytics service instead for queryable analytics.
     
     Formats data from ItemTable keys into human-readable Markdown.
     """

@@ -323,8 +323,7 @@ class TelemetryServer:
 
         logger.warning(
             "Cursor Markdown History monitor is DEPRECATED. "
-            "Markdown export will be removed in a future release. "
-            "Use the analytics service instead for queryable analytics."
+            "Markdown export will be removed in a future release."
         )
 
         logger.info("Initializing Cursor Markdown History monitor (DEPRECATED)")
@@ -334,14 +333,14 @@ class TelemetryServer:
         if output_dir:
             output_dir = Path(output_dir)
         
-        # Create markdown monitor (DuckDB integration removed - use analytics service instead)
+        # Create markdown monitor
         self.markdown_monitor = CursorMarkdownMonitor(
             session_monitor=self.session_monitor,
             output_dir=output_dir,
             poll_interval=markdown_config.get("poll_interval_seconds", 120.0),
             debounce_delay=markdown_config.get("debounce_delay_seconds", 10.0),
             query_timeout=markdown_config.get("query_timeout_seconds", 1.5),
-            enable_duckdb=False,  # Disabled - use analytics service instead
+            enable_duckdb=False,
             duckdb_path=None,
         )
 

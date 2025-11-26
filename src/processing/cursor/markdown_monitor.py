@@ -6,7 +6,6 @@
 Cursor Markdown History Monitor.
 
 DEPRECATED: This module is deprecated and will be removed in a future release.
-Use the analytics service instead for queryable analytics.
 
 Watches Cursor workspace databases and writes Markdown history files.
 """
@@ -27,7 +26,7 @@ from .markdown_writer import CursorMarkdownWriter, TRACE_RELEVANT_KEYS
 
 logger = logging.getLogger(__name__)
 
-# DuckDB support removed - use analytics service instead
+# DuckDB support removed
 DUCKDB_AVAILABLE = False
 CursorDuckDBWriter = None
 
@@ -37,7 +36,6 @@ class CursorMarkdownMonitor:
     Monitor Cursor workspace databases and write Markdown history files.
     
     DEPRECATED: This class is deprecated and will be removed in a future release.
-    Use the analytics service instead for queryable analytics.
     
     Uses file watching with polling fallback for reliability.
     Implements debounce to avoid excessive writes.
@@ -73,12 +71,9 @@ class CursorMarkdownMonitor:
         self.debounce_delay = debounce_delay
         self.query_timeout = query_timeout
         
-        # DuckDB support removed - use analytics service instead
+        # DuckDB support removed
         if enable_duckdb:
-            logger.warning(
-                "DuckDB sink via markdown monitor is deprecated. "
-                "Use the analytics service instead (enable via config: analytics.enabled=true)"
-            )
+            logger.warning("DuckDB sink via markdown monitor is deprecated")
         self.enable_duckdb = False
         self.duckdb_writer = None
         
@@ -120,7 +115,7 @@ class CursorMarkdownMonitor:
                 pass
         self.db_connections.clear()
         
-        # DuckDB connection removed (use analytics service instead)
+        # DuckDB connection removed
         
         logger.info("Markdown monitor stopped")
 
@@ -360,8 +355,6 @@ class CursorMarkdownMonitor:
                 data,
                 timestamp
             )
-            
-            # DuckDB writing removed - use analytics service instead
             
             # Update last hash
             self.last_data_hash[workspace_hash] = data_hash
