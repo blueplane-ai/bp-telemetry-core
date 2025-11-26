@@ -62,7 +62,7 @@ python scripts/init_redis.py
 python scripts/init_database.py
 
 # 6. Install and activate Cursor extension (required for session management and telemetry)
-cd extension
+cd src/capture/cursor/extension
 npm install
 npm run compile
 # Then install the VSIX in Cursor via Extensions panel
@@ -126,7 +126,7 @@ python scripts/init_database.py
 # See docs/SESSION_CONVERSATION_SCHEMA.md for migration details
 
 # 6. Install Claude Code hooks
-# TODO: Add Claude Code installation instructions
+python scripts/install_claude_hooks.py
 
 # 7. Start the processing server
 python scripts/server_ctl.py start --daemon
@@ -137,7 +137,56 @@ python scripts/server_ctl.py start --daemon
 # tail -f ~/.blueplane/server.log       # View logs
 
 # 8. Verify installation
-# TODO: Add Claude Code verification steps
+# Check hooks are installed
+ls -la ~/.claude/hooks/telemetry/
+
+# Check server is running
+python scripts/server_ctl.py status --verbose
+
+# View server logs
+tail -f ~/.blueplane/server.log
+
+# Check Redis queue
+redis-cli XLEN telemetry:events
+
+# View recent events
+redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+```
+
+### Verification (Claude Code)
+
+After installation, the hooks will capture events automatically as you work in Claude Code:
+
+```bash
+# Check hooks are configured in settings
+cat ~/.claude/settings.json | grep -A 5 "hooks"
+
+# View server logs
+tail -f ~/.blueplane/server.log
+
+# Check Redis queue
+redis-cli XLEN telemetry:events
+
+# View recent events
+redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+
+# Check SQLite database (events are stored here)
+python -c "
+from src.processing.database.sqlite_client import SQLiteClient
+from pathlib import Path
+client = SQLiteClient(str(Path.home() / '.blueplane' / 'telemetry.db'))
+with client.get_connection() as conn:
+    # Check Claude Code events
+    cursor = conn.execute('SELECT COUNT(*) FROM claude_raw_traces')
+    print(f'Total Claude Code events in database: {cursor.fetchone()[0]}')
+
+    # Check conversations
+    cursor = conn.execute('SELECT COUNT(*) FROM conversations WHERE platform = \"claude_code\"')
+    print(f'Total Claude Code conversations: {cursor.fetchone()[0]}')
+"
+
+# Run end-to-end test
+python scripts/test_end_to_end.py
 ```
 
 ### Verification (Cursor)

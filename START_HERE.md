@@ -7,7 +7,7 @@ This guide will help you set up Blueplane Telemetry from scratch to track your A
 ## Prerequisites
 
 - macOS (Intel or Apple Silicon)
-- Python 3.8 or higher
+- Python 3.11+
 - Node.js 16+ (for Cursor extension)
 - Redis server (can be installed via Homebrew)
 - Claude Code and/or Cursor installed
@@ -44,6 +44,8 @@ pip install -r requirements.txt
 ```
 
 ## Step 2: Claude Code Setup
+
+**Prerequisite:** Ensure Redis is running (see Step 1.1 above).
 
 Claude Code uses session hooks to track the lifecycle of your coding sessions. Install them with:
 
@@ -185,6 +187,8 @@ cd /path/to/bp-telemetry-core
 # Initialize SQLite database
 python scripts/init_database.py
 # Creates ~/.blueplane/telemetry.db with required tables
+# Note: If you have an existing database, it will automatically migrate to schema v2
+# See docs/SESSION_CONVERSATION_SCHEMA.md for migration details
 
 # Initialize Redis streams
 python scripts/init_redis.py
@@ -210,8 +214,6 @@ python scripts/server_ctl.py start --daemon
 ### 5.3 Verify Server is Running
 
 ```bash
-# Check server status
-python scripts/check_status.py
 
 # Or manually check:
 python scripts/server_ctl.py status --verbose
@@ -247,7 +249,9 @@ sqlite3 ~/.blueplane/telemetry.db "
 
 # Check raw event count
 sqlite3 ~/.blueplane/telemetry.db "
-  SELECT COUNT(*) as total_events FROM raw_traces;
+  SELECT
+    (SELECT COUNT(*) FROM claude_raw_traces) +
+    (SELECT COUNT(*) FROM cursor_raw_traces) as total_events;
 "
 ```
 
@@ -292,8 +296,7 @@ ls -lt ~/.cursor/User/History/*.json | head -10
 
 ```bash
 sqlite3 ~/.blueplane/telemetry.db "
-  SELECT * FROM raw_traces
-  WHERE platform='claude_code'
+  SELECT * FROM claude_raw_traces
   ORDER BY timestamp DESC
   LIMIT 5;
 "
@@ -311,8 +314,7 @@ sqlite3 ~/.blueplane/telemetry.db "
 
 # Check database for Cursor events
 sqlite3 ~/.blueplane/telemetry.db "
-  SELECT * FROM raw_traces
-  WHERE platform='cursor'
+  SELECT * FROM cursor_raw_traces
   ORDER BY timestamp DESC
   LIMIT 5;
 "
