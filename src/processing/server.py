@@ -20,6 +20,7 @@ import redis
 
 from .database.sqlite_client import SQLiteClient
 from .database.schema import create_schema
+from .database.writer import SQLiteBatchWriter
 from .claude_code.event_consumer import ClaudeEventConsumer
 from .common.cdc_publisher import CDCPublisher
 from .claude_code.raw_traces_writer import ClaudeRawTracesWriter

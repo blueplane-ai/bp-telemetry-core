@@ -126,6 +126,14 @@ class SQLiteClient:
         """
         Execute a SQL script (multiple statements).
 
+        WARNING: Python's executescript() issues an implicit COMMIT before
+        executing the script. This means the context manager's rollback won't
+        help if a mid-script failure occurs. Use only for idempotent DDL
+        operations (schema setup) where partial state is acceptable.
+
+        For transactional safety with multiple statements, use execute()
+        with individual statements instead.
+
         Args:
             script: SQL script string
         """

@@ -371,10 +371,10 @@ class CursorEventProcessor:
         )
 
         # Explicitly exclude Claude Code events
+        # Note: Rely on platform field and source, not hardcoded session ID prefixes
         is_claude = (
             platform == "claude_code" or
-            source in ["jsonl_monitor", "transcript_monitor", "claude_session_monitor"] or
-            event.get("sessionId", "").startswith("661360c4")  # Claude session IDs
+            source in ["jsonl_monitor", "transcript_monitor", "claude_session_monitor"]
         )
 
         return is_cursor and not is_claude

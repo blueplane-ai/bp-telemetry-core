@@ -226,9 +226,13 @@ class FileWatcher:
         self.debounce_task = None
         self.debounce_delay = 10.0
         self.poll_task = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def start_watching(self):
         """Start file watching with fallback."""
+        # Store event loop reference for thread-safe callbacks
+        self._loop = asyncio.get_running_loop()
+
         # Record initial state
         try:
             stat = self.db_path.stat()
@@ -259,9 +263,11 @@ class FileWatcher:
 
                 def on_modified(self, event):
                     if event.src_path == str(self.watcher.db_path):
-                        asyncio.create_task(
-                            self.watcher._handle_change_with_debounce()
-                        )
+                        if self.watcher._loop is not None:
+                            asyncio.run_coroutine_threadsafe(
+                                self.watcher._handle_change_with_debounce(),
+                                self.watcher._loop
+                            )
 
             self.watchdog_observer = Observer()
             self.watchdog_observer.schedule(
@@ -735,6 +741,7 @@ class UserLevelListener:
             "version": "0.1.0",
             "hook_type": "DatabaseTrace",
             "event_type": "composer",
+            "platform": "cursor",
             "event_id": str(uuid.uuid4()),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "metadata": {

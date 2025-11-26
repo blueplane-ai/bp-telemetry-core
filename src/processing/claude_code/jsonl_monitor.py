@@ -546,13 +546,15 @@ class ClaudeCodeJSONLMonitor:
             if session_id in self.session_agents:
                 del self.session_agents[session_id]
 
+            # Store workspace_path BEFORE removing from cache (for cleanup below)
+            workspace_path = self.workspace_cache.get(session_id, "")
+
             # Remove from workspace cache
             if session_id in self.workspace_cache:
                 del self.workspace_cache[session_id]
 
             # Clean up discovered files for this session
             # (Remove files associated with this session from discovered_files)
-            workspace_path = self.workspace_cache.get(session_id, "")
             if workspace_path:
                 project_dir = self._find_project_dir(workspace_path)
                 if project_dir:
