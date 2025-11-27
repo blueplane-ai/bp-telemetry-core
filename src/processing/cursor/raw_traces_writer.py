@@ -78,7 +78,6 @@ class CursorRawTracesWriter:
         """
         metadata = event.get("metadata", {})
         payload = event.get("payload", {})
-
         # Handle full_data which can be either a dict or a list
         full_data_raw = payload.get("full_data", {})
         if isinstance(full_data_raw, list):
@@ -87,8 +86,6 @@ class CursorRawTracesWriter:
             full_data = {"items": full_data_raw} if full_data_raw else {}
         else:
             full_data = full_data_raw if isinstance(full_data_raw, dict) else {}
-
-        extracted = payload.get("extracted_fields", {})
 
         # Generate event_id if not present
         event_id = event.get("event_id") or str(uuid.uuid4())

@@ -18,11 +18,13 @@ Usage:
     pytest testing_integration/test_claude_telemetry.py -v -s
 """
 
+import json
 import os
 import signal
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -170,19 +172,10 @@ class ClaudeTelemetryTest:
         except Exception:
             return False
 
-    # SQL queries by table name - prevents SQL injection by avoiding f-string interpolation
-    _COUNT_QUERIES = {
-        "claude_raw_traces": "SELECT COUNT(*) FROM claude_raw_traces WHERE timestamp >= ?",
-        "cursor_raw_traces": "SELECT COUNT(*) FROM cursor_raw_traces WHERE timestamp >= ?",
-    }
-    _SELECT_QUERIES = {
-        "claude_raw_traces": "SELECT * FROM claude_raw_traces WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
-        "cursor_raw_traces": "SELECT * FROM cursor_raw_traces WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
-    }
-
     def get_event_count_since(self, table: str = "claude_raw_traces") -> int:
         """Get count of events since test started."""
-        if table not in self._COUNT_QUERIES:
+        allowed_tables = {"claude_raw_traces", "cursor_raw_traces"}
+        if table not in allowed_tables:
             raise ValueError(f"Invalid table name: {table}")
 
         if not self.telemetry_db.exists():
@@ -190,10 +183,10 @@ class ClaudeTelemetryTest:
 
         try:
             with sqlite3.connect(str(self.telemetry_db)) as conn:
-                cursor = conn.execute(
-                    self._COUNT_QUERIES[table],
-                    (self.start_time.isoformat(),)
-                )
+                cursor = conn.execute(f"""
+                    SELECT COUNT(*) FROM {table}
+                    WHERE timestamp >= ?
+                """, (self.start_time.isoformat(),))
                 return cursor.fetchone()[0]
         except sqlite3.Error as e:
             print(f"  Warning: DB error - {e}")
@@ -201,7 +194,8 @@ class ClaudeTelemetryTest:
 
     def get_recent_events(self, table: str = "claude_raw_traces", limit: int = 5) -> list:
         """Get recent events from database."""
-        if table not in self._SELECT_QUERIES:
+        allowed_tables = {"claude_raw_traces", "cursor_raw_traces"}
+        if table not in allowed_tables:
             raise ValueError(f"Invalid table name: {table}")
 
         if not self.telemetry_db.exists():
@@ -210,10 +204,12 @@ class ClaudeTelemetryTest:
         try:
             with sqlite3.connect(str(self.telemetry_db)) as conn:
                 conn.row_factory = sqlite3.Row
-                cursor = conn.execute(
-                    self._SELECT_QUERIES[table],
-                    (self.start_time.isoformat(), limit)
-                )
+                cursor = conn.execute(f"""
+                    SELECT * FROM {table}
+                    WHERE timestamp >= ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                """, (self.start_time.isoformat(), limit))
                 return [dict(row) for row in cursor.fetchall()]
         except sqlite3.Error as e:
             print(f"  Warning: DB error - {e}")

@@ -17,6 +17,7 @@ Usage:
     python testing_integration/test_cursor_telemetry.py
 """
 
+import json
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
@@ -67,12 +68,14 @@ class CursorTelemetryTest:
         since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
         try:
-            with sqlite3.connect(str(self.telemetry_db)) as conn:
-                cursor = conn.execute("""
-                    SELECT COUNT(*) FROM cursor_raw_traces
-                    WHERE timestamp >= ?
-                """, (since,))
-                return cursor.fetchone()[0]
+            conn = sqlite3.connect(str(self.telemetry_db))
+            cursor = conn.execute("""
+                SELECT COUNT(*) FROM cursor_raw_traces
+                WHERE timestamp >= ?
+            """, (since,))
+            count = cursor.fetchone()[0]
+            conn.close()
+            return count
         except sqlite3.Error as e:
             print(f"  Warning: DB error - {e}")
             return 0
@@ -83,15 +86,17 @@ class CursorTelemetryTest:
             return []
 
         try:
-            with sqlite3.connect(str(self.telemetry_db)) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.execute("""
-                    SELECT event_id, event_type, timestamp, storage_level, workspace_hash
-                    FROM cursor_raw_traces
-                    ORDER BY timestamp DESC
-                    LIMIT ?
-                """, (limit,))
-                return [dict(row) for row in cursor.fetchall()]
+            conn = sqlite3.connect(str(self.telemetry_db))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("""
+                SELECT event_id, event_type, timestamp, storage_level, workspace_hash
+                FROM cursor_raw_traces
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (limit,))
+            events = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            return events
         except sqlite3.Error as e:
             print(f"  Warning: DB error - {e}")
             return []

@@ -19,7 +19,7 @@ bd.db
 !metadata.json
 !config.json
 
-# Merge artifacts (temporary files from 3-way merge)
+# Exclude merge artifacts from tracked JSONL
 beads.base.jsonl
 beads.base.meta.json
 beads.left.jsonl

@@ -23,7 +23,7 @@ import redis
 
 from .session_monitor import SessionMonitor
 from .workspace_mapper import WorkspaceMapper
-from ...capture.shared.redis_streams import TELEMETRY_EVENTS_STREAM
+from ...capture.shared.redis_streams import TELEMETRY_MESSAGE_QUEUE_STREAM
 
 logger = logging.getLogger(__name__)
 
@@ -475,7 +475,7 @@ class CursorDatabaseMonitor:
 
             # Send to Redis
             self.redis_client.xadd(
-                TELEMETRY_EVENTS_STREAM,
+                TELEMETRY_MESSAGE_QUEUE_STREAM,
                 {
                     k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
                     for k, v in event.items()
@@ -539,6 +539,3 @@ class CursorDatabaseMonitor:
 
         if status == "error":
             self.health_stats[workspace_hash]["errors"] += 1
-
-
-

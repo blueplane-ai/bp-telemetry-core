@@ -266,4 +266,3 @@ class SQLiteClient:
             True if database file exists
         """
         return self.db_path.exists()
-
