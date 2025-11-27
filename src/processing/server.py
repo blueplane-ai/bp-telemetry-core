@@ -35,7 +35,9 @@ from .claude_code.transcript_monitor import ClaudeCodeTranscriptMonitor
 from .claude_code.session_monitor import ClaudeCodeSessionMonitor
 from .claude_code.jsonl_monitor import ClaudeCodeJSONLMonitor
 from .claude_code.session_timeout import SessionTimeoutManager
+from .http_endpoint import HTTPEndpoint
 from ..capture.shared.config import Config
+from ..capture.shared.queue_writer import MessageQueueWriter
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,8 @@ class TelemetryServer:
         self.claude_session_monitor: Optional[ClaudeCodeSessionMonitor] = None
         self.claude_jsonl_monitor: Optional[ClaudeCodeJSONLMonitor] = None
         self.claude_timeout_manager: Optional[SessionTimeoutManager] = None
+        self.http_endpoint: Optional[HTTPEndpoint] = None
+        self.queue_writer: Optional[MessageQueueWriter] = None
         self.running = False
         self.monitor_threads: list[threading.Thread] = []
 
@@ -228,6 +232,39 @@ class TelemetryServer:
         )
 
         logger.info("Claude Code event consumer initialized")
+
+    def _initialize_http_endpoint(self) -> None:
+        """
+        Initialize HTTP endpoint for zero-dependency hooks.
+
+        Server: Reads host/port from config.yaml
+        Hooks: Use BLUEPLANE_SERVER_URL env var (not config.yaml)
+        """
+        http_config = self.config.get("http_endpoint", {})
+        enabled = http_config.get("enabled", True)
+
+        if not enabled:
+            logger.info("HTTP endpoint is disabled")
+            return
+
+        logger.info("Initializing HTTP endpoint for hook events")
+
+        # Create queue writer for the HTTP endpoint
+        # Use "events" stream (telemetry:events) for hook events
+        self.queue_writer = MessageQueueWriter(self.config, stream_type="events")
+
+        # Get configuration from config.yaml (SERVER side)
+        host = http_config.get("host", "127.0.0.1")
+        port = http_config.get("port", 8787)
+
+        # Create HTTP endpoint
+        self.http_endpoint = HTTPEndpoint(
+            enqueue_func=self.queue_writer.enqueue,
+            host=host,
+            port=port,
+        )
+
+        logger.info(f"HTTP endpoint initialized (will listen on {host}:{port})")
 
     def _initialize_cursor_monitor(self) -> None:
         """Initialize Cursor database monitor."""
@@ -438,10 +475,16 @@ class TelemetryServer:
             self._initialize_database()
             self._initialize_redis()
             self._initialize_consumer()
+            self._initialize_http_endpoint()
             self._initialize_cursor_monitor()
             self._initialize_markdown_monitor()
             self._initialize_unified_cursor_monitor()
             self._initialize_claude_code_monitor()
+
+            # Start HTTP endpoint (if enabled)
+            if self.http_endpoint:
+                self.http_endpoint.start()
+                logger.info("HTTP endpoint started")
 
             # Start monitors in background threads (if enabled)
             if self.session_monitor:
@@ -642,7 +685,11 @@ class TelemetryServer:
             return
 
         logger.info("Stopping server...")
-        
+
+        # Stop HTTP endpoint
+        if self.http_endpoint:
+            self.http_endpoint.stop()
+
         # Log final metrics before shutdown
         try:
             metrics = get_metrics()

@@ -220,9 +220,21 @@ See: [layer2_db_architecture.md](docs/architecture/layer2_db_architecture.md)
 
 **Claude Code (macOS)**:
 
-- Session transcripts: `~/.claude/projects/<project-hash>/<session-hash>.jsonl`
-- Format: JSONL with conversation turns and tool calls
-- Monitor: File watcher on JSONL append operations
+- **Session transcripts**: `~/.claude/projects/<project-hash>/<session-hash>.jsonl`
+- **Format**: JSONL with conversation turns and tool calls
+- **Monitor**: File watcher on JSONL append operations
+- **Hooks** (Two implementations available):
+  - **HTTP-based hooks** (RECOMMENDED): Zero-dependency hooks using Python stdlib only
+    - Install: `python scripts/install_claude_hooks_http.py`
+    - Uninstall: `python scripts/uninstall_claude_hooks_http.py`
+    - Architecture: Hook (env vars) → HTTP POST → Server (config.yaml) → Redis → Database
+    - Configuration: `BLUEPLANE_SERVER_URL` env var (default: http://127.0.0.1:8787)
+    - Files: `src/capture/claude_code/hooks_http/` and `src/capture/claude_code/hook_base_http.py`
+  - **Redis-based hooks** (DEPRECATED): Direct Redis write with dependencies
+    - Install: `python scripts/install_claude_hooks.py` (deprecated)
+    - Uninstall: `python scripts/uninstall_claude_hooks.py`
+    - Requires: redis, pyyaml, and other Python packages
+    - Files: `src/capture/claude_code/hooks/` and `src/capture/claude_code/hook_base.py`
 - See: [CURSOR_RAW_TRACES_CAPTURE.md](docs/CURSOR_RAW_TRACES_CAPTURE.md) for parsing details
 
 **Cursor (macOS)**:
@@ -264,6 +276,12 @@ pip install -e ".[dev]"
 # Run tests
 pytest tests/
 pytest tests/ -v --cov=src --cov-report=term-missing
+
+# Hook management (Claude Code)
+python scripts/install_claude_hooks_http.py      # Install HTTP hooks (RECOMMENDED - zero dependencies)
+python scripts/uninstall_claude_hooks_http.py    # Uninstall HTTP hooks
+python scripts/install_claude_hooks.py           # Install Redis hooks (deprecated)
+python scripts/uninstall_claude_hooks.py         # Uninstall Redis hooks
 
 # Server management (Layer 2) - RECOMMENDED
 python scripts/server_ctl.py start --daemon  # Start in background

@@ -176,6 +176,18 @@ logging:
   log_markdown_writes: true
 
 # =============================================================================
+# HTTP ENDPOINT (for zero-dependency hook event submission)
+# =============================================================================
+# SERVER SIDE CONFIG ONLY - hooks use environment variables (not this config)
+# Server: Binds HTTP endpoint to host:port below
+# Hooks: Use BLUEPLANE_SERVER_URL env var (default: http://127.0.0.1:8787)
+# =============================================================================
+http_endpoint:
+  enabled: true
+  host: "127.0.0.1"  # Localhost only for security
+  port: 8787
+
+# =============================================================================
 # FEATURES
 # =============================================================================
 features:

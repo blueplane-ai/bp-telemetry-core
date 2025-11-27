@@ -50,13 +50,28 @@ pip install -r requirements.txt
 Claude Code uses session hooks to track the lifecycle of your coding sessions. Install them with:
 
 ```bash
-# Run the Claude hooks installation script
-python scripts/install_claude_hooks.py
+# Run the HTTP-based Claude hooks installation script (RECOMMENDED)
+python scripts/install_claude_hooks_http.py
 
 # This will:
-# - Copy session hooks (session_start.py, session_end.py) to ~/.claude/hooks/telemetry/
+# - Copy zero-dependency HTTP hooks (session_start.py, session_end.py) to ~/.claude/hooks/telemetry/
 # - Update ~/.claude/settings.json with hook configurations
 # - Create ~/.blueplane/ directory for data storage
+# - Hooks use ONLY Python stdlib - no external dependencies!
+
+# Alternative (deprecated): Redis-based hooks
+# python scripts/install_claude_hooks.py
+# (Requires redis, pyyaml, and other dependencies - not recommended)
+```
+
+**Uninstalling Hooks:**
+
+```bash
+# Uninstall HTTP hooks
+python scripts/uninstall_claude_hooks_http.py
+
+# Uninstall old Redis hooks
+python scripts/uninstall_claude_hooks.py
 ```
 
 **Note:** Claude Code currently only uses session lifecycle hooks (session_start and session_end) to track when sessions begin and end. Additional telemetry is captured through transcript monitoring.
