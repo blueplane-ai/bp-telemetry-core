@@ -47,6 +47,7 @@ Host System (macOS)
 └── Data Storage
     └── ~/.blueplane/ [READ/WRITE]
         ├── telemetry.db (SQLite)
+        ├── analytics.duckdb (DuckDB - optional, created when analytics enabled)
         ├── config/*.yaml
         └── workspace_db_cache.json
 ```
@@ -55,7 +56,8 @@ Host System (macOS)
 
 1. **Capture Layer**: Claude hooks and Cursor extension write events to Redis streams
 2. **Processing Layer**: Docker containers process events and store in SQLite
-3. **Access Layer**: CLI reads from SQLite and Redis for analytics
+3. **Analytics Layer**: Analytics service (optional) reads from SQLite and writes to DuckDB
+4. **Access Layer**: CLI reads from SQLite, Redis, and DuckDB for analytics
 
 ## 3. Docker Container Architecture
 
