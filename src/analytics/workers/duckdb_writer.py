@@ -6,6 +6,11 @@
 DuckDB Writer for Analytics Service.
 
 Writes analytics data from SQLite traces to DuckDB for queryable analytics.
+
+See also:
+- Schema design: docs/ANALYTICS_SERVICE_REFACTOR_PLAN.md
+- Materialized views: docs/ANALYTICS_MATERIALIZED_VIEWS.md
+- Query functions: src/analytics/queries/analytics_queries.py
 """
 
 import json
@@ -30,6 +35,17 @@ class DuckDBWriter:
     DuckDB writer for analytics data from SQLite traces.
     
     Processes raw traces from SQLite and writes structured analytics data to DuckDB.
+    
+    Schema:
+    - workspaces: Workspace metadata and statistics
+    - ai_generations: AI generation events
+    - composer_sessions: Composer session data
+    - file_history: File access history
+    - raw_traces: Raw trace data with composite key (trace_sequence, platform)
+    
+    See also:
+    - Schema documentation: docs/ANALYTICS_SERVICE_REFACTOR_PLAN.md
+    - Materialized views design: docs/ANALYTICS_MATERIALIZED_VIEWS.md
     """
 
     def __init__(self, database_path: Optional[Path] = None):

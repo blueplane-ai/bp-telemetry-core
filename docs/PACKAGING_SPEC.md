@@ -110,7 +110,16 @@ environment:
   - CURSOR_DATA_DIR=/capture/cursor
   - WORKSPACE_ROOT=/workspace
   - LOG_LEVEL=${LOG_LEVEL:-INFO}
+  - ANALYTICS_ENABLED=${ANALYTICS_ENABLED:-false}  # Enable analytics service
 restart: unless-stopped
+```
+
+**Analytics Service** (Optional):
+- Disabled by default (`ANALYTICS_ENABLED=false`)
+- When enabled, creates `analytics.duckdb` in `/data/blueplane/`
+- Reads from SQLite (`telemetry.db`) and writes to DuckDB
+- Runs independently from trace capture pipeline
+- Processes on configurable schedule (default: 5 minutes)
 ```
 
 ### 3.2 Dockerfile for Processing Server

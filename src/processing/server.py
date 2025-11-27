@@ -446,7 +446,14 @@ class TelemetryServer:
         logger.info("Claude Code monitors initialized")
 
     def _initialize_analytics_service(self) -> None:
-        """Initialize analytics service."""
+        """
+        Initialize analytics service.
+        
+        See also:
+        - Analytics service: src/analytics/service.py
+        - Configuration: config/config.yaml (analytics section)
+        - Architecture: docs/ANALYTICS_SERVICE_REFACTOR_PLAN.md
+        """
         analytics_config = self.config.get("analytics", {})
         enabled = analytics_config.get("enabled", False)
 

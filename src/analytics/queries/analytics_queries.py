@@ -6,6 +6,11 @@
 Analytics query functions for DuckDB.
 
 Provides query functions for analyzing workspace activity and AI interactions.
+
+See also:
+- API endpoints design: docs/ANALYTICS_API_ENDPOINTS.md
+- Materialized views: docs/ANALYTICS_MATERIALIZED_VIEWS.md
+- DuckDB schema: src/analytics/workers/duckdb_writer.py
 """
 
 import logging

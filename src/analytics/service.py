@@ -7,6 +7,11 @@ Analytics Service for Blueplane Telemetry Core.
 
 Independent service that reads from SQLite and writes to DuckDB for analytics.
 Runs on a configurable schedule, separate from the real-time capture pipeline.
+
+See also:
+- Architecture: docs/ANALYTICS_SERVICE_REFACTOR_PLAN.md
+- Testing: docs/ANALYTICS_TESTING_PLAN.md
+- ADR: docs/adr/0001-analytics-service-architecture-decisions.md
 """
 
 import asyncio
@@ -28,6 +33,16 @@ class AnalyticsService:
     
     Runs independently from the capture pipeline, reading processed data
     from SQLite and writing structured analytics to DuckDB.
+    
+    Architecture:
+    - Reads from SQLite: docs/ANALYTICS_SERVICE_REFACTOR_PLAN.md
+    - Writes to DuckDB: src/analytics/workers/duckdb_writer.py
+    - State tracking: Uses analytics_processing_state table in SQLite
+    
+    See also:
+    - Configuration: config/config.yaml (analytics section)
+    - Materialized views design: docs/ANALYTICS_MATERIALIZED_VIEWS.md
+    - API endpoints design: docs/ANALYTICS_API_ENDPOINTS.md
     """
 
     def __init__(self, config: Optional[Config] = None):

@@ -6,6 +6,11 @@
 SQLite Reader for Analytics Service.
 
 Reads raw traces from SQLite database for processing into DuckDB analytics.
+
+See also:
+- Architecture: docs/ANALYTICS_SERVICE_REFACTOR_PLAN.md
+- Platform column handling: docs/ANALYTICS_PLATFORM_COLUMN_FIX.md
+- Testing: docs/ANALYTICS_TESTING_SUMMARY.md
 """
 
 import json
@@ -24,7 +29,15 @@ class SQLiteReader:
     """
     Reads raw traces from SQLite for analytics processing.
     
-    Supports incremental processing with state tracking.
+    Supports incremental processing with state tracking via analytics_processing_state table.
+    
+    Platform-specific handling:
+    - Cursor: Uses external_session_id column
+    - Claude Code: Uses external_id column
+    
+    See also:
+    - Platform column fix: docs/ANALYTICS_PLATFORM_COLUMN_FIX.md
+    - State tracking: Uses analytics_processing_state table
     """
 
     def __init__(self, db_path: Path):
