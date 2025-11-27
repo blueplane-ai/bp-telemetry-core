@@ -125,8 +125,17 @@ python scripts/init_database.py
 # The migration creates cursor_sessions table and updates conversations table schema
 # See docs/SESSION_CONVERSATION_SCHEMA.md for migration details
 
-# 6. Install Claude Code hooks
-python scripts/install_claude_hooks.py
+# 6. Install Claude Code hooks (HTTP-based, zero-dependency - RECOMMENDED)
+python scripts/install_claude_hooks_http.py
+# Hooks use ONLY Python stdlib - no external dependencies!
+
+# Alternative (deprecated): Redis-based hooks
+# python scripts/install_claude_hooks.py
+# (Requires redis, pyyaml, and other dependencies - not recommended)
+
+# Uninstalling hooks:
+# python scripts/uninstall_claude_hooks_http.py  # Uninstall HTTP hooks
+# python scripts/uninstall_claude_hooks.py       # Uninstall old Redis hooks
 
 # 7. Start the processing server
 python scripts/server_ctl.py start --daemon
@@ -480,7 +489,10 @@ bp-telemetry-core/
 │   │   ├── cursor/           # Cursor platform
 │   │   │   └── extension/    # VSCode extension (handles telemetry)
 │   │   └── claude_code/      # Claude Code platform
-│   │       └── hooks/        # Hook scripts for Claude Code
+│   │       ├── hooks/        # Redis-based hooks (deprecated)
+│   │       ├── hooks_http/   # HTTP-based hooks (recommended - zero dependencies)
+│   │       ├── hook_base.py  # Base class for Redis hooks
+│   │       └── hook_base_http.py  # Base class for HTTP hooks
 │   └── processing/           # Layer 2 implementation ✅
 │       ├── database/         # SQLite client and schema
 │       │   ├── sqlite_client.py
@@ -498,6 +510,7 @@ bp-telemetry-core/
 │       │   ├── event_consumer.py
 │       │   ├── raw_traces_writer.py
 │       │   └── database_monitor.py
+│       ├── http_endpoint.py # HTTP endpoint for zero-dependency hooks
 │       └── server.py        # Main processing server
 ├── config/
 │   ├── config.yaml          # Unified default configuration
@@ -507,7 +520,10 @@ bp-telemetry-core/
 │   ├── init_database.py     # Initialize SQLite database
 │   ├── server_ctl.py        # Server lifecycle management (start/stop/restart/status)
 │   ├── start_server.py      # Direct server start (legacy, use server_ctl.py instead)
-│   ├── install_claude_hooks.py # Install Claude Code session hooks
+│   ├── install_claude_hooks_http.py # Install HTTP hooks (recommended - zero dependencies)
+│   ├── uninstall_claude_hooks_http.py # Uninstall HTTP hooks
+│   ├── install_claude_hooks.py # Install Redis hooks (deprecated)
+│   ├── uninstall_claude_hooks.py # Uninstall Redis hooks
 │   ├── test_end_to_end.py   # End-to-end test
 │   └── test_database_traces.py
 ├── docs/

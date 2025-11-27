@@ -321,6 +321,63 @@ class ServerController:
 
         return result
 
+    def check_http_endpoint_status(self) -> Dict[str, Any]:
+        """
+        Check HTTP endpoint status.
+
+        Returns:
+            Dictionary with HTTP endpoint status information
+        """
+        result = {
+            "configured": False,
+            "enabled": False,
+            "host": "127.0.0.1",
+            "port": 8787,
+            "reachable": False,
+            "error": None,
+        }
+
+        # Load config if available
+        if HAS_CONFIG:
+            try:
+                config = Config()
+                http_config = config.get("http_endpoint", {})
+                result["configured"] = True
+                result["enabled"] = http_config.get("enabled", True)
+                result["host"] = http_config.get("host", "127.0.0.1")
+                result["port"] = http_config.get("port", 8787)
+            except Exception as e:
+                result["error"] = f"Config load error: {e}"
+                return result
+
+        if not result["enabled"]:
+            return result
+
+        # Try to reach the health endpoint
+        try:
+            import urllib.request
+            import urllib.error
+
+            url = f"http://{result['host']}:{result['port']}/health"
+            request = urllib.request.Request(url, method="GET")
+
+            with urllib.request.urlopen(request, timeout=2.0) as response:
+                if response.status == 200:
+                    result["reachable"] = True
+                else:
+                    result["error"] = f"Unexpected status: {response.status}"
+
+        except urllib.error.URLError as e:
+            result["error"] = f"Connection failed: {e.reason}"
+        except urllib.error.HTTPError as e:
+            result["error"] = f"HTTP error: {e.code}"
+        except TimeoutError:
+            result["error"] = "Connection timeout"
+        except Exception as e:
+            result["error"] = str(e)
+
+        return result
+
     def check_monitor_status(self) -> Dict[str, Any]:
         """
         Check which monitors are configured and their settings.
@@ -666,6 +723,21 @@ class ServerController:
             print(f"  Status: UNAVAILABLE")
             if redis_status.get("error"):
                 print(f"  Error: {redis_status['error']}")
+
+        # HTTP Endpoint status
+        print("")
+        print("HTTP Endpoint:")
+        http_status = self.check_http_endpoint_status()
+        if not http_status["enabled"]:
+            print(f"  Status: DISABLED")
+        elif http_status["reachable"]:
+            print(f"  Status: OK")
+            print(f"  URL: http://{http_status['host']}:{http_status['port']}")
+        else:
+            print(f"  Status: NOT REACHABLE")
+            print(f"  URL: http://{http_status['host']}:{http_status['port']}")
+            if http_status.get("error"):
+                print(f"  Error: {http_status['error']}")
 
         # Monitor configuration status
         print("")
