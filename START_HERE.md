@@ -7,7 +7,7 @@ This guide will help you set up Blueplane Telemetry from scratch to track your A
 ## Prerequisites
 
 - macOS (Intel or Apple Silicon)
-- Python 3.8 or higher
+- Python 3.11+
 - Node.js 16+ (for Cursor extension)
 - Redis server (can be installed via Homebrew)
 - Claude Code and/or Cursor installed
@@ -45,16 +45,33 @@ pip install -r requirements.txt
 
 ## Step 2: Claude Code Setup
 
+**Prerequisite:** Ensure Redis is running (see Step 1.1 above).
+
 Claude Code uses session hooks to track the lifecycle of your coding sessions. Install them with:
 
 ```bash
-# Run the Claude hooks installation script
-python scripts/install_claude_hooks.py
+# Run the HTTP-based Claude hooks installation script (RECOMMENDED)
+python scripts/install_claude_hooks_http.py
 
 # This will:
-# - Copy session hooks (session_start.py, session_end.py) to ~/.claude/hooks/telemetry/
+# - Copy zero-dependency HTTP hooks (session_start.py, session_end.py) to ~/.claude/hooks/telemetry/
 # - Update ~/.claude/settings.json with hook configurations
 # - Create ~/.blueplane/ directory for data storage
+# - Hooks use ONLY Python stdlib - no external dependencies!
+
+# Alternative (deprecated): Redis-based hooks
+# python scripts/install_claude_hooks.py
+# (Requires redis, pyyaml, and other dependencies - not recommended)
+```
+
+**Uninstalling Hooks:**
+
+```bash
+# Uninstall HTTP hooks
+python scripts/uninstall_claude_hooks_http.py
+
+# Uninstall old Redis hooks
+python scripts/uninstall_claude_hooks.py
 ```
 
 **Note:** Claude Code currently only uses session lifecycle hooks (session_start and session_end) to track when sessions begin and end. Additional telemetry is captured through transcript monitoring.
@@ -116,6 +133,16 @@ cursor --install-extension ./blueplane-cursor-telemetry-0.1.0.vsix
    - `Blueplane: Stop Current Session`
 6. Alternatively, look for "Blueplane" on the bottom right corner in your extension status bar
 
+### 3.4 Configure Cursor Log Level
+
+To ensure detailed traces are being captured, set your log level to Trace:
+
+1. Open Command Palette (Cmd+Shift+P on macOS, Ctrl+Shift+P on Windows/Linux)
+2. Type and select: `Developer: Set Log Level`
+3. Select: `Trace`
+
+This enables detailed logging that can help diagnose issues with the extension or telemetry capture.
+
 ## Step 4: Configuration (Optional)
 
 Blueplane Telemetry Core uses a unified YAML configuration system. The default configuration (`config/config.yaml`) works out of the box, but you can customize settings by creating a user config file.
@@ -175,6 +202,8 @@ cd /path/to/bp-telemetry-core
 # Initialize SQLite database
 python scripts/init_database.py
 # Creates ~/.blueplane/telemetry.db with required tables
+# Note: If you have an existing database, it will automatically migrate to schema v2
+# See docs/SESSION_CONVERSATION_SCHEMA.md for migration details
 
 # Initialize Redis streams
 python scripts/init_redis.py
@@ -185,7 +214,7 @@ python scripts/init_redis.py
 
 ```bash
 # Start the telemetry processing server
-python scripts/start_server.py
+python scripts/server_ctl.py start --daemon
 
 # The server will:
 # - Load configuration from ~/.blueplane/config.yaml (if exists) or config/config.yaml
@@ -200,11 +229,9 @@ python scripts/start_server.py
 ### 5.3 Verify Server is Running
 
 ```bash
-# Check server status
-python scripts/check_status.py
 
 # Or manually check:
-ps aux | grep start_server.py
+python scripts/server_ctl.py status --verbose
 redis-cli XLEN telemetry:events
 ```
 
@@ -214,13 +241,13 @@ Once everything is running, your telemetry data is being collected in the follow
 
 ### Data Locations
 
-| Component                   | Location                                                     | Description                             |
-| --------------------------- | ------------------------------------------------------------ | --------------------------------------- |
-| **Main Database**           | `~/.blueplane/telemetry.db`                                  | SQLite database with all telemetry data |
-| **Redis Metrics**           | `localhost:6379`                                             | Real-time metrics and message queue     |
-| **Claude Code Sessions**    | `~/.claude/projects/<project>/<session-hash>.jsonl`          | Raw Claude Code transcripts             |
-| **Cursor Workspace Traces** | `~/Library/Application Support/Cursor/User/<workspace-hash>` | Raw Cursor Conversation Info            |
-| **Processing Logs**         | Console output from `start_server.py`                        | Server activity and errors on stdout    |
+| Component                   | Location                                                     | Description                              |
+| --------------------------- | ------------------------------------------------------------ | ---------------------------------------- |
+| **Main Database**           | `~/.blueplane/telemetry.db`                                  | SQLite database with all telemetry data  |
+| **Redis Metrics**           | `localhost:6379`                                             | Real-time metrics and message queue      |
+| **Claude Code Sessions**    | `~/.claude/projects/<project>/<session-hash>.jsonl`          | Raw Claude Code transcripts              |
+| **Cursor Workspace Traces** | `~/Library/Application Support/Cursor/User/<workspace-hash>` | Raw Cursor Conversation Info             |
+| **Processing Logs**         | `~/.blueplane/server.log`                                    | Server activity and errors (daemon mode) |
 
 ### Accessing Your Data
 
@@ -237,7 +264,9 @@ sqlite3 ~/.blueplane/telemetry.db "
 
 # Check raw event count
 sqlite3 ~/.blueplane/telemetry.db "
-  SELECT COUNT(*) as total_events FROM raw_traces;
+  SELECT
+    (SELECT COUNT(*) FROM claude_raw_traces) +
+    (SELECT COUNT(*) FROM cursor_raw_traces) as total_events;
 "
 ```
 
@@ -282,8 +311,7 @@ ls -lt ~/.cursor/User/History/*.json | head -10
 
 ```bash
 sqlite3 ~/.blueplane/telemetry.db "
-  SELECT * FROM raw_traces
-  WHERE platform='claude_code'
+  SELECT * FROM claude_raw_traces
   ORDER BY timestamp DESC
   LIMIT 5;
 "
@@ -301,8 +329,7 @@ sqlite3 ~/.blueplane/telemetry.db "
 
 # Check database for Cursor events
 sqlite3 ~/.blueplane/telemetry.db "
-  SELECT * FROM raw_traces
-  WHERE platform='cursor'
+  SELECT * FROM cursor_raw_traces
   ORDER BY timestamp DESC
   LIMIT 5;
 "
@@ -347,7 +374,8 @@ ls -la ~/.claude/hooks/telemetry/*.py
 
 ```bash
 # Check server logs
-# Look for errors in the console where start_server.py is running
+# Look for errors in the server logs
+tail -f ~/.blueplane/server.log
 
 # Verify database exists
 ls -la ~/.blueplane/telemetry.db
@@ -355,6 +383,39 @@ ls -la ~/.blueplane/telemetry.db
 # Check Redis stream
 redis-cli XLEN telemetry:events
 ```
+
+## Step 8: Install Claude Code Skill (Recommended)
+
+For the best experience working with Blueplane in Claude Code, install the Blueplane management skill at the user level. This makes the skill available across all your projects.
+
+```bash
+# Copy the skill to your user-level Claude skills directory
+mkdir -p ~/.claude/skills
+cp -r .claude/skills/blueplane ~/.claude/skills/
+
+# The skill will now be available in all Claude Code sessions
+```
+
+### What the Skill Provides
+
+The Blueplane skill gives Claude comprehensive knowledge about:
+
+- **Server Management**: Commands to start, stop, restart, and check server status
+- **Database Queries**: How to retrieve traces, sessions, conversations, and workspace data
+- **Troubleshooting**: Debug telemetry issues and verify data collection
+- **Development Workflow**: Integrated server lifecycle management
+
+### Using the Skill
+
+Once installed, you can ask Claude questions like:
+
+- "Show me recent Claude Code traces from the database"
+- "What Cursor sessions are currently active?"
+- "Restart the Blueplane server and check its status"
+- "Query conversation data for this workspace"
+- "How many events have been captured today?"
+
+The skill contains detailed documentation about the database schema, query patterns, and server management commands. See [Blueplane Skill Documentation](./.claude/skills/blueplane/SKILL.md) for complete reference.
 
 ## Additional Resources
 

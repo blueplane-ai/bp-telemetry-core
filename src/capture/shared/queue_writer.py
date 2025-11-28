@@ -23,6 +23,8 @@ except ImportError:
     REDIS_AVAILABLE = False
 
 from .config import Config
+from .event_schema import EventSchema
+from .redis_streams import TELEMETRY_DLQ_STREAM
 
 
 # Configure logging
@@ -49,12 +51,13 @@ class MessageQueueWriter:
     - Dead Letter Queue (DLQ) support
     """
 
-    def __init__(self, config: Optional[Config] = None):
+    def __init__(self, config: Optional[Config] = None, stream_type: str = "message_queue"):
         """
         Initialize message queue writer.
 
         Args:
             config: Configuration object (auto-loads if None)
+            stream_type: Stream type to write to ("events" for hooks, "message_queue" for monitors)
         """
         if not REDIS_AVAILABLE:
             logger.warning("Redis library not available - events will not be queued")
@@ -69,7 +72,7 @@ class MessageQueueWriter:
         self._connection_pool: Optional[redis.ConnectionPool] = None
 
         # Stream configuration
-        self.stream_config = self.config.get_stream_config("message_queue")
+        self.stream_config = self.config.get_stream_config(stream_type)
         self.dlq_config = self.config.get_stream_config("dlq")
 
         # Initialize connection
@@ -167,7 +170,8 @@ class MessageQueueWriter:
                 'enqueued_at': enqueued_at,
                 'retry_count': '0',
                 'platform': platform,
-                'external_session_id': session_id,
+                'session_id': session_id,  # Used by session_monitor
+                'external_session_id': session_id,  # Legacy field, kept for compatibility
                 'hook_type': event['hook_type'],
                 'timestamp': event['timestamp'],
             }

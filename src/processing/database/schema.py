@@ -643,8 +643,8 @@ def migrate_to_v2(client: SQLiteClient) -> None:
     
     try:
         with client.get_connection() as conn:
-            # Enable foreign keys
-            conn.execute("PRAGMA foreign_keys = ON")
+            # Disable foreign keys for migration (we'll re-enable at the end)
+            conn.execute("PRAGMA foreign_keys = OFF")
             
             # Step 1: Create cursor_sessions table
             logger.info("Step 1: Creating cursor_sessions table...")
@@ -914,6 +914,8 @@ def migrate_to_v2(client: SQLiteClient) -> None:
             
             # Step 4: Create new conversations table
             logger.info("Step 3: Creating new conversations table schema...")
+            # Drop conversations_new if it exists from a previous failed migration
+            conn.execute("DROP TABLE IF EXISTS conversations_new")
             conn.execute("""
                 CREATE TABLE conversations_new (
                     id TEXT PRIMARY KEY,
@@ -1036,6 +1038,7 @@ def migrate_to_v2(client: SQLiteClient) -> None:
             
             # Step 6: Replace old table with new table
             logger.info("Step 5: Replacing conversations table...")
+            # Foreign keys are already disabled at the start of the migration
             conn.execute("DROP TABLE conversations")
             conn.execute("ALTER TABLE conversations_new RENAME TO conversations")
             
@@ -1047,6 +1050,9 @@ def migrate_to_v2(client: SQLiteClient) -> None:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conv_platform_active ON conversations(platform, ended_at) WHERE ended_at IS NULL;")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conv_platform_started ON conversations(platform, started_at);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_workspace ON conversations(workspace_hash) WHERE workspace_hash IS NOT NULL;")
+            
+            # Re-enable foreign keys
+            conn.execute("PRAGMA foreign_keys = ON")
             
             conn.commit()
             logger.info("Migration to v2 complete successfully")

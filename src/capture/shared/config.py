@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
+from .redis_streams import get_stream_name
+
 
 @dataclass
 class RedisConfig:
@@ -126,7 +128,7 @@ class Config:
         Get stream configuration.
 
         Args:
-            stream_type: Type of stream (message_queue, dlq, cdc)
+            stream_type: Type of stream (events, message_queue, dlq, cdc)
 
         Returns:
             StreamConfig for the requested stream
@@ -135,7 +137,7 @@ class Config:
         stream_data = streams.get(stream_type, {})
 
         return StreamConfig(
-            name=f"telemetry:{stream_type}",
+            name=get_stream_name(stream_type),
             max_length=stream_data.get("max_length", 10000),
             block_ms=stream_data.get("block_ms", 1000),
             count=stream_data.get("count", 100),

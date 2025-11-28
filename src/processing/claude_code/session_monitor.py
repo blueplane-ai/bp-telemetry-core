@@ -20,6 +20,7 @@ import redis
 from .session_persistence import SessionPersistence
 from ..database.sqlite_client import SQLiteClient
 from ...capture.shared.project_utils import derive_project_name
+from ...capture.shared.redis_streams import TELEMETRY_EVENTS_STREAM
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class ClaudeCodeSessionMonitor:
         self,
         redis_client: redis.Redis,
         sqlite_client: Optional[SQLiteClient] = None,
-        stream_name: str = "telemetry:events",
+        stream_name: str = TELEMETRY_EVENTS_STREAM,
         consumer_group: str = "session_monitors",
         consumer_name: str = "claude_code_session_monitor",
     ):

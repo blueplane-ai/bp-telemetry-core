@@ -189,6 +189,11 @@ streams:
       default: true
       description: "Use approximate trimming for better performance"
 
+    persist_after_ack:
+      type: boolean
+      default: false
+      description: "Keep messages in stream after ACK (for debugging). Set to true to retain messages, false to trim after processing."
+
   # Dead letter queue for failed messages
   dlq:
     retention_days:
@@ -485,6 +490,32 @@ logging:
   log_markdown_writes:
     type: boolean
     default: true
+
+# =============================================================================
+# HTTP ENDPOINT - HTTP server for zero-dependency hook event submission
+# =============================================================================
+# SERVER SIDE CONFIG ONLY - hooks use environment variables (not this config)
+# Server: Reads host/port from this config to bind HTTP endpoint
+# Hooks: Use BLUEPLANE_SERVER_URL env var (default: http://127.0.0.1:8787)
+# =============================================================================
+http_endpoint:
+  # Enable/disable HTTP endpoint
+  enabled:
+    type: boolean
+    default: true
+    description: "Enable HTTP endpoint for zero-dependency hooks"
+
+  # Host to bind to (SERVER side)
+  host:
+    type: string
+    default: "127.0.0.1"
+    description: "Host to bind HTTP server to (localhost only for security)"
+
+  # Port to listen on (SERVER side)
+  port:
+    type: integer
+    default: 8787
+    description: "Port for HTTP server to listen on"
 
 # =============================================================================
 # FEATURES - Feature flags

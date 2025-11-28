@@ -12,6 +12,8 @@ import logging
 from typing import Dict, Any, Optional
 import redis
 
+from ...capture.shared.redis_streams import CDC_EVENTS_STREAM
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,7 +27,7 @@ class CDCPublisher:
     - Auto-trim stream to prevent unbounded growth
     """
 
-    def __init__(self, redis_client: redis.Redis, stream_name: str = "cdc:events", max_length: int = 100000):
+    def __init__(self, redis_client: redis.Redis, stream_name: str = CDC_EVENTS_STREAM, max_length: int = 100000):
         """
         Initialize CDC publisher.
 

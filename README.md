@@ -22,7 +22,7 @@ Blueplane Telemetry Core is an open-source system for capturing, processing, and
 - **Real-Time Analytics**: Sub-second metrics updates with async processing pipeline
 - **Rich Insights**: Track acceptance rates, productivity, tool usage, and conversation patterns
 - **Zero Configuration**: Embedded databases (SQLite, Redis) with minimal setup required
-- **Multiple Interfaces**: CLI, MCP Server, and Web Dashboard for accessing your data
+- **Multiple Interfaces**: CLI, MCP Server, and Web Dashboard for accessing your data (in development)
 
 ## Architecture
 
@@ -30,7 +30,7 @@ Blueplane Telemetry Core is built on a three-layer architecture:
 
 - **Layer 1: Capture** - Lightweight hooks and monitors that capture telemetry events from IDEs
 - **Layer 2: Processing** - High-performance async pipeline for event processing and storage
-- **Layer 3: Interfaces** - CLI, MCP Server, and Dashboard for data access and visualization
+- **Layer 3: Interfaces** - CLI, MCP Server, and Dashboard for data access and visualization (in development)
 
 See [Architecture Overview](./docs/ARCHITECTURE.md) for detailed information.
 
@@ -62,7 +62,7 @@ python scripts/init_redis.py
 python scripts/init_database.py
 
 # 6. Install and activate Cursor extension (required for session management and telemetry)
-cd extension
+cd src/capture/cursor/extension
 npm install
 npm run compile
 # Then install the VSIX in Cursor via Extensions panel
@@ -71,22 +71,29 @@ npm run compile
 # Database monitoring is handled by the Python processing server (step 8).
 
 # 7. Configure Cursor for telemetry
-# In Cursor: Open Command Palette (Cmd+Shift+P / Ctrl+Shift+P)
+# In Cursor: Open Command Palette (Cmd+Shift+P)
 # Run: "Developer: Set Log Level" → Select "Trace"
 # This enables detailed logging (optional, for debugging)
 
-# 8. Start the processing server (in a separate terminal)
+# 8. Start the processing server
 cd ../..
-python scripts/start_server.py
+python scripts/server_ctl.py start --daemon
 
 # The processing server includes:
 # - Fast path consumer (Redis → SQLite)
-# - Database monitor (polls Cursor SQLite databases)
-# - Session monitor (tracks active sessions from Redis)
+# - UnifiedCursorMonitor (monitors Cursor SQLite databases)
+# - Session monitor (tracks active sessions)
+# - Event processor with ACK support
+
+# Server management commands:
+# python scripts/server_ctl.py status --verbose  # Check server status
+# python scripts/server_ctl.py stop             # Graceful shutdown
+# python scripts/server_ctl.py restart --daemon # Restart server
 
 # 9. Verify installation
 # Check extension is active in Cursor: Extensions → Blueplane Telemetry
-# Check processing server logs for any errors
+# Check processing server: python scripts/server_ctl.py status
+# View logs: tail -f ~/.blueplane/server.log
 # Monitor Redis: redis-cli XLEN telemetry:events
 ```
 
@@ -118,14 +125,77 @@ python scripts/init_database.py
 # The migration creates cursor_sessions table and updates conversations table schema
 # See docs/SESSION_CONVERSATION_SCHEMA.md for migration details
 
-# 6. Install Claude Code hooks
-# TODO: Add Claude Code installation instructions
+# 6. Install Claude Code hooks (HTTP-based, zero-dependency - RECOMMENDED)
+python scripts/install_claude_hooks_http.py
+# Hooks use ONLY Python stdlib - no external dependencies!
 
-# 7. Start the processing server (in a separate terminal)
-python scripts/start_server.py
+# Alternative (deprecated): Redis-based hooks
+# python scripts/install_claude_hooks.py
+# (Requires redis, pyyaml, and other dependencies - not recommended)
+
+# Uninstalling hooks:
+# python scripts/uninstall_claude_hooks_http.py  # Uninstall HTTP hooks
+# python scripts/uninstall_claude_hooks.py       # Uninstall old Redis hooks
+
+# 7. Start the processing server
+python scripts/server_ctl.py start --daemon
+
+# Server management:
+# python scripts/server_ctl.py status   # Check status
+# python scripts/server_ctl.py stop     # Stop server
+# tail -f ~/.blueplane/server.log       # View logs
 
 # 8. Verify installation
-# TODO: Add Claude Code verification steps
+# Check hooks are installed
+ls -la ~/.claude/hooks/telemetry/
+
+# Check server is running
+python scripts/server_ctl.py status --verbose
+
+# View server logs
+tail -f ~/.blueplane/server.log
+
+# Check Redis queue
+redis-cli XLEN telemetry:events
+
+# View recent events
+redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+```
+
+### Verification (Claude Code)
+
+After installation, the hooks will capture events automatically as you work in Claude Code:
+
+```bash
+# Check hooks are configured in settings
+cat ~/.claude/settings.json | grep -A 5 "hooks"
+
+# View server logs
+tail -f ~/.blueplane/server.log
+
+# Check Redis queue
+redis-cli XLEN telemetry:events
+
+# View recent events
+redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+
+# Check SQLite database (events are stored here)
+python -c "
+from src.processing.database.sqlite_client import SQLiteClient
+from pathlib import Path
+client = SQLiteClient(str(Path.home() / '.blueplane' / 'telemetry.db'))
+with client.get_connection() as conn:
+    # Check Claude Code events
+    cursor = conn.execute('SELECT COUNT(*) FROM claude_raw_traces')
+    print(f'Total Claude Code events in database: {cursor.fetchone()[0]}')
+
+    # Check conversations
+    cursor = conn.execute('SELECT COUNT(*) FROM conversations WHERE platform = \"claude_code\"')
+    print(f'Total Claude Code conversations: {cursor.fetchone()[0]}')
+"
+
+# Run end-to-end test
+python scripts/test_end_to_end.py
 ```
 
 ### Verification (Cursor)
@@ -197,13 +267,15 @@ High-performance async pipeline for event processing:
 
 [Learn more →](./docs/architecture/layer2_async_pipeline.md)
 
-### Layer 3: Interfaces
+### Layer 3: Interfaces ⏳ (Pending Development)
 
-Multiple ways to access your telemetry data:
+Multiple ways to access your telemetry data (all interfaces are currently in development):
 
-- **CLI**: Rich terminal interface with tables and charts
-- **MCP Server**: Enable AI assistants to become telemetry-aware
+- **CLI**: Rich terminal interface with tables and charts (coming soon)
+- **MCP Server**: Enable AI assistants to become telemetry-aware (coming soon)
 - **Dashboard**: Web-based visualization and analytics (coming soon)
+
+**Current Status**: Layer 3 interfaces are pending development. Currently, you can access telemetry data directly via SQLite queries and Redis CLI commands.
 
 [Learn more →](./docs/architecture/layer3_cli_interface.md)
 
@@ -292,6 +364,36 @@ paths:
 ```
 
 See `config/config.schema.yaml` for complete documentation of all configuration options.
+
+## Claude Code Skill (Recommended)
+
+For the best development experience with Claude Code, install the **Blueplane management skill** at the user level. This enables Claude to understand and interact with Blueplane telemetry data across all your projects.
+
+### Installing the Blueplane Skill
+
+```bash
+# Copy the skill to your user-level Claude skills directory
+mkdir -p ~/.claude/skills
+cp -r .claude/skills/blueplane ~/.claude/skills/
+
+# The skill will now be available in all Claude Code sessions
+```
+
+### What the Skill Provides
+
+- **Server Management**: Start, stop, restart, and monitor the telemetry server
+- **Database Queries**: Retrieve trace, session, project, and conversation data
+- **Troubleshooting**: Debug telemetry issues and check system health
+- **Development Workflow**: Integrated server lifecycle management during development
+
+Once installed, you can ask Claude to:
+
+- "Show me recent Claude Code traces"
+- "What Cursor sessions are in the database?"
+- "Restart the Blueplane server"
+- "Show me conversation data for this workspace"
+
+See [Blueplane Skill Documentation](./.claude/skills/blueplane/SKILL.md) for complete reference.
 
 ## Documentation
 
@@ -387,7 +489,10 @@ bp-telemetry-core/
 │   │   ├── cursor/           # Cursor platform
 │   │   │   └── extension/    # VSCode extension (handles telemetry)
 │   │   └── claude_code/      # Claude Code platform
-│   │       └── hooks/        # Hook scripts for Claude Code
+│   │       ├── hooks/        # Redis-based hooks (deprecated)
+│   │       ├── hooks_http/   # HTTP-based hooks (recommended - zero dependencies)
+│   │       ├── hook_base.py  # Base class for Redis hooks
+│   │       └── hook_base_http.py  # Base class for HTTP hooks
 │   └── processing/           # Layer 2 implementation ✅
 │       ├── database/         # SQLite client and schema
 │       │   ├── sqlite_client.py
@@ -405,6 +510,7 @@ bp-telemetry-core/
 │       │   ├── event_consumer.py
 │       │   ├── raw_traces_writer.py
 │       │   └── database_monitor.py
+│       ├── http_endpoint.py # HTTP endpoint for zero-dependency hooks
 │       └── server.py        # Main processing server
 ├── config/
 │   ├── config.yaml          # Unified default configuration
@@ -412,8 +518,12 @@ bp-telemetry-core/
 ├── scripts/
 │   ├── init_redis.py        # Initialize Redis streams
 │   ├── init_database.py     # Initialize SQLite database
-│   ├── start_server.py      # Start processing server
-│   ├── install_claude_hooks.py # Install Claude Code session hooks
+│   ├── server_ctl.py        # Server lifecycle management (start/stop/restart/status)
+│   ├── start_server.py      # Direct server start (legacy, use server_ctl.py instead)
+│   ├── install_claude_hooks_http.py # Install HTTP hooks (recommended - zero dependencies)
+│   ├── uninstall_claude_hooks_http.py # Uninstall HTTP hooks
+│   ├── install_claude_hooks.py # Install Redis hooks (deprecated)
+│   ├── uninstall_claude_hooks.py # Uninstall Redis hooks
 │   ├── test_end_to_end.py   # End-to-end test
 │   └── test_database_traces.py
 ├── docs/
