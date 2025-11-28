@@ -204,8 +204,8 @@ class TelemetryServer:
     def _initialize_consumer(self) -> None:
         """Initialize fast path consumer."""
         logger.info("Initializing fast path consumer")
-        
-        stream_config = self.config.get_stream_config("message_queue")
+
+        stream_config = self.config.get_stream_config("events")
         cdc_config = self.config.get_stream_config("cdc")
         
         # Create CDC publisher
