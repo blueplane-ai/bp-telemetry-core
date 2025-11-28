@@ -21,7 +21,7 @@ import zlib
 from pathlib import Path
 from io import StringIO
 from datetime import datetime, timezone
-from typing import Tuple, Dict, Any
+from typing import Tuple
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -453,7 +453,7 @@ def verify_database(session_id: str) -> bool:
             event = json.loads(decompressed)
 
             if 'payload' in event and 'entry_data' in event['payload']:
-                print(f"✓ Decompressed event structure valid")
+                print("✓ Decompressed event structure valid")
                 print(f"  Event keys: {list(event.keys())}")
                 print(f"  Entry data keys: {list(event['payload']['entry_data'].keys())[:5]}...")
             else:
@@ -487,7 +487,7 @@ def verify_database(session_id: str) -> bool:
         )
         row = cursor.fetchone()
         if row:
-            print(f"✓ Context fields populated:")
+            print("✓ Context fields populated:")
             print(f"  CWD: {row[0]}")
             print(f"  Version: {row[1]}")
             print(f"  Git branch: {row[2]}")
@@ -562,7 +562,7 @@ def run_end_to_end_test() -> bool:
         normalized_path = normalized_path[1:]
     project_dir = Path.home() / ".claude" / "projects" / f"-{normalized_path}"
 
-    print(f"\nTest Configuration:")
+    print("\nTest Configuration:")
     print(f"  Session ID: {session_id}")
     print(f"  Workspace: {workspace_path}")
     print(f"  Project dir: {project_dir}")
@@ -624,7 +624,7 @@ def run_end_to_end_test() -> bool:
     # 8. Cleanup (optional - keep files for debugging)
     # session_file.unlink()
     # agent_file.unlink()
-    print(f"\nTest files preserved for debugging:")
+    print("\nTest files preserved for debugging:")
     print(f"  {session_file}")
     print(f"  {agent_file}")
 

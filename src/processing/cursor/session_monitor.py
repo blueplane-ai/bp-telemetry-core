@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Optional
@@ -474,7 +475,6 @@ class SessionMonitor:
             # Decode fields
             event_type = self._decode_field(fields, 'event_type')
             platform = self._decode_field(fields, 'platform')
-            hook_type = self._decode_field(fields, 'hook_type')
 
 
             # Only process Cursor session events
@@ -571,7 +571,7 @@ class SessionMonitor:
                     "workspace_hash": workspace_hash,
                     "workspace_path": workspace_path,
                     "workspace_name": workspace_name,
-                    "started_at": asyncio.get_event_loop().time(),
+                    "started_at": time.time(),
                     "source": "redis",
                 }
 

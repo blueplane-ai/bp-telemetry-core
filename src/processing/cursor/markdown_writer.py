@@ -111,12 +111,12 @@ class CursorMarkdownWriter:
         lines = []
         
         # Header
-        lines.append(f"# Cursor Workspace History")
-        lines.append(f"")
+        lines.append("# Cursor Workspace History")
+        lines.append("")
         lines.append(f"**Workspace**: `{workspace_path}`")
         lines.append(f"**Workspace Hash**: `{workspace_hash}`")
         lines.append(f"**Generated**: {timestamp.isoformat()}")
-        lines.append(f"")
+        lines.append("")
         lines.append("---")
         lines.append("")
         
@@ -215,7 +215,7 @@ class CursorMarkdownWriter:
                         dt = datetime.fromtimestamp(timestamp / 1000)
                         lines.append(f"- **{dt.strftime('%Y-%m-%d %H:%M:%S')}**")
                     else:
-                        lines.append(f"- **Unknown time**")
+                        lines.append("- **Unknown time**")
                     
                     gen_type = gen.get('type', 'unknown')
                     lines.append(f"  - Type: `{gen_type}`")
@@ -368,7 +368,7 @@ class CursorMarkdownWriter:
             
             ran_commands = data.get('ranTerminalCommands', False)
             if ran_commands:
-                lines.append(f"- **Terminal Commands**: Executed")
+                lines.append("- **Terminal Commands**: Executed")
             
             git_state = data.get('gitState')
             if git_state:

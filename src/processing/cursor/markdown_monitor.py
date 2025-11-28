@@ -10,9 +10,7 @@ Watches Cursor workspace databases and writes Markdown history files.
 
 import asyncio
 import hashlib
-import json
 import logging
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Set
@@ -119,7 +117,7 @@ class CursorMarkdownMonitor:
         for conn in self.db_connections.values():
             try:
                 await conn.close()
-            except:
+            except Exception:
                 pass
         self.db_connections.clear()
         
@@ -127,7 +125,7 @@ class CursorMarkdownMonitor:
         if self.duckdb_writer:
             try:
                 self.duckdb_writer.close()
-            except:
+            except Exception:
                 pass
         
         logger.info("Markdown monitor stopped")
@@ -418,7 +416,7 @@ class CursorMarkdownMonitor:
                 try:
                     await conn.close()
                     logger.info(f"Closed database connection for inactive workspace {workspace_hash}")
-                except:
+                except Exception:
                     pass
             
             # Clean up state

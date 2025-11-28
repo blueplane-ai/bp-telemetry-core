@@ -16,7 +16,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from ..database.sqlite_client import SQLiteClient
 from ..database.writer import SQLiteBatchWriter
@@ -98,7 +98,7 @@ class CursorRawTracesWriter:
         if timestamp_str:
             try:
                 timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            except:
+            except (ValueError, TypeError):
                 timestamp = datetime.now(timezone.utc)
         else:
             timestamp = datetime.now(timezone.utc)

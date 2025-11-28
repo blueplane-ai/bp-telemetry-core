@@ -14,7 +14,6 @@ import uuid
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
-from pathlib import Path
 
 try:
     import redis

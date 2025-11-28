@@ -7,7 +7,6 @@ Platform detection utilities for Cursor database monitoring.
 """
 
 import platform
-import sys
 from pathlib import Path
 from typing import List
 

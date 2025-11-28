@@ -7,11 +7,10 @@ Configuration management for capture layer.
 Loads and validates configuration from YAML files.
 """
 
-import os
 import yaml
 from pathlib import Path
 from typing import Dict, Any, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .redis_streams import get_stream_name
 

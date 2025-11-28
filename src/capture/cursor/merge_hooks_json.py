@@ -13,7 +13,7 @@ preserving existing hooks and appending Blueplane hooks.
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 
 def generate_hooks_json(hooks_dir: Path) -> Dict[str, Any]:

@@ -281,7 +281,6 @@ class ClaudeCodeTranscriptMonitor:
         # - usage stats
 
         role = entry.get('role', 'unknown')
-        content = entry.get('content', '')
         timestamp = entry.get('timestamp')
 
         # Build trace event

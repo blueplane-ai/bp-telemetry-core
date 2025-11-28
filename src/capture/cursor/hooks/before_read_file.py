@@ -35,7 +35,6 @@ class BeforeReadFileHook(CursorHookBase):
         # Extract file read data from stdin
         file_path = self.input_data.get('file_path', '')
         content = self.input_data.get('content', '')
-        attachments = self.input_data.get('attachments', [])
 
         # Build event payload
         payload = {

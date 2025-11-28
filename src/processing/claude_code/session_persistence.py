@@ -13,7 +13,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 import uuid
 
 from ..database.sqlite_client import SQLiteClient
@@ -194,7 +194,7 @@ class SessionPersistence:
             
             # Insert into conversations table
             with self.sqlite_client.get_connection() as conn:
-                cursor = conn.execute("""
+                conn.execute("""
                     INSERT OR REPLACE INTO conversations (
                         id, session_id, external_id, platform,
                         workspace_hash, workspace_name, started_at,
@@ -310,7 +310,7 @@ class SessionPersistence:
                     
                     # Skip if session_id is None or empty (shouldn't happen, but safety check)
                     if not session_id:
-                        logger.warning(f"Skipping recovered session with None/empty external_id")
+                        logger.warning("Skipping recovered session with None/empty external_id")
                         continue
                     
                     workspace_hash = row[1]

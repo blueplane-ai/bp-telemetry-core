@@ -13,7 +13,7 @@ and publishes CDC events for slow path workers.
 import json
 import logging
 import time
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Any, Optional
 from collections import deque
 import redis
 

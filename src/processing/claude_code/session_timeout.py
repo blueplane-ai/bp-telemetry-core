@@ -12,7 +12,6 @@ Runs periodically to prevent memory leaks and ensure proper session closure.
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict
 
 from .session_persistence import SessionPersistence
 from .session_monitor import ClaudeCodeSessionMonitor

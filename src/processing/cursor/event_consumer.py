@@ -12,16 +12,20 @@ Implements at-least-once delivery guarantee with:
 - Claim mechanism for stale events
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import os
-import time
 from datetime import datetime, timezone
-from typing import List, Tuple, Optional, Callable
+from typing import TYPE_CHECKING, List, Tuple, Optional
 import redis
 
 from ...capture.shared.redis_streams import TELEMETRY_EVENTS_STREAM
+
+if TYPE_CHECKING:
+    from .raw_traces_writer import CursorRawTracesWriter
 
 logger = logging.getLogger(__name__)
 
@@ -417,10 +421,10 @@ class CursorEventProcessor:
         )
 
         # Explicitly exclude Claude Code events
+        # Note: Rely on platform field and source, not hardcoded session ID prefixes
         is_claude = (
             platform == "claude_code" or
-            source in ["jsonl_monitor", "transcript_monitor", "claude_session_monitor"] or
-            event.get("sessionId", "").startswith("661360c4")  # Claude session IDs
+            source in ["jsonl_monitor", "transcript_monitor", "claude_session_monitor"]
         )
 
         return is_cursor and not is_claude

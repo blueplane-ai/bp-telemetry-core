@@ -8,7 +8,6 @@ CDC (Change Data Capture) publisher for slow path coordination.
 Publishes events to Redis Streams for async worker processing.
 """
 
-import json
 import logging
 from typing import Dict, Any, Optional
 import redis

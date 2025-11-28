@@ -8,7 +8,6 @@ Workspace-to-Database Mapper.
 Maps workspace_hash to state.vscdb files using workspace path hash matching.
 """
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -150,9 +149,9 @@ class WorkspaceMapper:
                         ''', (f'%{workspace_path}%', f'%{workspace_path}%'))
                         if await cursor.fetchone():
                             return True
-                    except:
+                    except Exception:
                         continue
-        except:
+        except Exception:
             pass
 
         return False

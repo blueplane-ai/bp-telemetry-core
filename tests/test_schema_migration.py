@@ -18,8 +18,7 @@ sys.path.insert(0, str(project_root))
 
 from src.processing.database.sqlite_client import SQLiteClient
 from src.processing.database.schema import (
-    migrate_schema, get_schema_version, SCHEMA_VERSION,
-    create_schema
+    migrate_schema, get_schema_version, SCHEMA_VERSION
 )
 
 

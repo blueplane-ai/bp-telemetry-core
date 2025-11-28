@@ -460,8 +460,6 @@ def create_indexes(client: SQLiteClient) -> None:
         with client.get_connection() as conn:
             cursor = conn.execute("PRAGMA table_info(conversations)")
             columns = [row[1] for row in cursor.fetchall()]
-            conversations_columns = columns.copy()
-            conversations_columns = columns.copy()
             if 'external_session_id' in columns and 'external_id' not in columns:
                 has_new_schema = False
     except Exception:

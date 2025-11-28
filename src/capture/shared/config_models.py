@@ -8,7 +8,7 @@ Provides strongly-typed dataclasses for all configuration sections.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from pathlib import Path
 
 

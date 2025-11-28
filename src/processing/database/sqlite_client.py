@@ -18,6 +18,104 @@ from contextlib import contextmanager
 logger = logging.getLogger(__name__)
 
 
+def _split_sql_statements(script: str) -> list[str]:
+    """
+    Split SQL script into individual statements, handling embedded semicolons.
+
+    Correctly handles:
+    - Semicolons inside single-quoted strings ('foo;bar')
+    - Semicolons inside double-quoted identifiers ("col;name")
+    - Semicolons inside single-line comments (-- comment;)
+    - Semicolons inside block comments (/* comment; */)
+    - Escaped quotes in SQLite style ('O''Brien' -> O'Brien)
+
+    Note: SQLite string escaping rules:
+    - Backslash is NOT an escape character in SQLite strings
+    - Literal '\\n' in a string is two characters (backslash + n), not a newline
+    - Single quotes are escaped by doubling them: '' represents one quote
+    - This parser follows SQLite's escaping conventions, not C-style escaping
+
+    Args:
+        script: SQL script with multiple statements
+
+    Returns:
+        List of individual SQL statements (stripped, non-empty)
+    """
+    statements = []
+    current = []
+    in_single_quote = False
+    in_double_quote = False
+    in_line_comment = False
+    in_block_comment = False
+    i = 0
+    chars = script
+
+    while i < len(chars):
+        c = chars[i]
+        next_c = chars[i + 1] if i + 1 < len(chars) else ''
+
+        # Handle line comments
+        if not in_single_quote and not in_double_quote and not in_block_comment:
+            if c == '-' and next_c == '-':
+                in_line_comment = True
+                current.append(c)
+                i += 1
+                continue
+
+        # Handle end of line comment
+        if in_line_comment and c == '\n':
+            in_line_comment = False
+            current.append(c)
+            i += 1
+            continue
+
+        # Handle block comments
+        if not in_single_quote and not in_double_quote and not in_line_comment:
+            if c == '/' and next_c == '*':
+                in_block_comment = True
+                current.append(c)
+                i += 1
+                continue
+            if in_block_comment and c == '*' and next_c == '/':
+                in_block_comment = False
+                current.append(c)
+                current.append(next_c)
+                i += 2
+                continue
+
+        # Handle quotes (only outside comments)
+        if not in_line_comment and not in_block_comment:
+            if c == "'" and not in_double_quote:
+                # Check for escaped quote ('')
+                if in_single_quote and next_c == "'":
+                    current.append(c)
+                    current.append(next_c)
+                    i += 2
+                    continue
+                in_single_quote = not in_single_quote
+            elif c == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+
+        # Handle statement terminator
+        if c == ';' and not in_single_quote and not in_double_quote and not in_line_comment and not in_block_comment:
+            stmt = ''.join(current).strip()
+            if stmt:
+                statements.append(stmt)
+            current = []
+            i += 1
+            continue
+
+        current.append(c)
+        i += 1
+
+    # Handle final statement without trailing semicolon
+    stmt = ''.join(current).strip()
+    if stmt:
+        statements.append(stmt)
+
+    return statements
+
+
 class SQLiteClient:
     """
     SQLite client with optimized settings for telemetry ingestion.
@@ -122,16 +220,43 @@ class SQLiteClient:
             conn.executemany(query, params)
             conn.commit()
 
-    def execute_script(self, script: str) -> None:
+    def execute_script(self, script: str, use_transaction: bool = True) -> None:
         """
-        Execute a SQL script (multiple statements).
+        Execute a SQL script (multiple statements) safely.
+
+        By default, executes statements within an explicit transaction to ensure
+        atomicity. If any statement fails, all changes are rolled back.
 
         Args:
-            script: SQL script string
+            script: SQL script string (semicolon-separated statements)
+            use_transaction: If True (default), wrap in BEGIN/COMMIT with rollback
+                           on failure. If False, use Python's executescript()
+                           which issues implicit COMMITs (unsafe for data ops).
+
+        Note:
+            DDL statements (CREATE, ALTER, DROP) may not be fully rollback-safe
+            in SQLite. For schema migrations, consider use_transaction=False
+            with idempotent statements (IF NOT EXISTS, IF EXISTS).
         """
         with self.get_connection() as conn:
-            conn.executescript(script)
-            conn.commit()
+            if use_transaction:
+                # Safe mode: split and execute in explicit transaction
+                # Uses smart parser that handles embedded semicolons in strings/comments
+                statements = _split_sql_statements(script)
+                try:
+                    conn.execute("BEGIN")
+                    for stmt in statements:
+                        conn.execute(stmt)
+                    conn.execute("COMMIT")
+                except Exception as e:
+                    conn.execute("ROLLBACK")
+                    logger.error(f"Script execution failed, rolled back: {e}")
+                    raise
+            else:
+                # Unsafe mode: use executescript (implicit COMMITs)
+                # WARNING: executescript() issues implicit COMMIT before script
+                conn.executescript(script)
+                conn.commit()
 
     def exists(self) -> bool:
         """

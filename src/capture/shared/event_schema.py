@@ -193,9 +193,9 @@ class EventSchema:
             "hook_type",
         ]
 
-        for field in required_fields:
-            if field not in event:
-                raise ValueError(f"Missing required field: {field}")
+        for required_field in required_fields:
+            if required_field not in event:
+                raise ValueError(f"Missing required field: {required_field}")
 
         # Validate platform
         if event["platform"] not in [p.value for p in Platform]:

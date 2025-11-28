@@ -11,7 +11,6 @@ Called by the Cursor extension on activation/deactivation.
 """
 
 import argparse
-import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -21,7 +20,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.queue_writer import MessageQueueWriter
-from shared.event_schema import EventType
 
 
 def send_session_event(event_type: str, workspace_path: str, session_id: str, workspace_hash: str) -> bool:
@@ -77,7 +75,7 @@ def main():
 
     # Send event (silent failure)
     try:
-        success = send_session_event(
+        send_session_event(
             args.event_type,
             args.workspace_path,
             args.session_id,

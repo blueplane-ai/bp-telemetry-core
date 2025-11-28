@@ -12,7 +12,7 @@ Reads from CDC stream and updates conversations table with derived data.
 import asyncio
 import json
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 import redis
 
 from ..database.sqlite_client import SQLiteClient
