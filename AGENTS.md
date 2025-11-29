@@ -8,6 +8,8 @@ License-Filename: LICENSE
 
 This file provides guidance to Claude Code (claude.ai/code) and other AI assistants when working with code in this repository.
 
+> Note for Claude Code: `CLAUDE.md` simply points here. Treat this file as the canonical instructions.
+
 ## Work Tracking
 
 **IMPORTANT**: Use the `bd` command (beads issue tracker) for tracking all new work instead of markdown todo lists. Create issues for features, bugs, and tasks using:
@@ -42,6 +44,13 @@ bd ready --json
 ```
 
 **Note**: Beads will auto-import from JSONL on first command if the database is missing, but explicitly running `bd sync --import-only` ensures the database is initialized before checking for work.
+
+## GitHub CLI (PRs)
+
+- Verify auth: `gh auth status`
+- Push branch first: `git push origin <branch>`
+- Create PR: `gh pr create --title "<title>" --body "<summary>" --base main --head <branch>`
+- If push is blocked (permission/2FA), ask a human to push/open the PR.
 
 ## Project Overview
 
