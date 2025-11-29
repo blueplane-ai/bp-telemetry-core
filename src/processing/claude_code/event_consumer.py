@@ -630,6 +630,7 @@ class ClaudeEventConsumer:
 
         logger.info(f"Claude Code event consumer started: {self.consumer_name}")
 
+        iteration = 0
         while self.running:
             try:
                 # Check pending message count - prioritize if backlog is significant
@@ -665,6 +666,7 @@ class ClaudeEventConsumer:
                     messages = []
                     if iteration % 10 == 0:  # Log every 10 iterations when skipping
                         logger.info(f"Prioritizing pending messages: {pending_count} pending, skipping new reads")
+                iteration += 1
 
                 if messages:
                     # Add events to batch with their message IDs
