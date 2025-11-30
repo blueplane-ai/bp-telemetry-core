@@ -12,7 +12,7 @@
 import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { SessionInfo } from './types';
-import { QueueWriter } from './queueWriter';
+import { HTTPQueueWriter } from './httpQueueWriter';
 import { ExtensionConfig } from './config';
 
 export class SessionManager {
@@ -21,7 +21,7 @@ export class SessionManager {
   constructor(
     private context: vscode.ExtensionContext,
     private config: ExtensionConfig,
-    private queueWriter?: QueueWriter
+    private queueWriter?: HTTPQueueWriter
   ) {}
 
   /**
@@ -192,8 +192,8 @@ export class SessionManager {
     // Build session event (use snake_case for consistency with Python hooks)
     const event = {
       version: '0.1.0',
-      hookType: 'session',
-      eventType: `session_${eventType}`,
+      hook_type: 'session',
+      event_type: `session_${eventType}`,
       timestamp: new Date().toISOString(),
       payload: {
         workspace_path: workspacePath,

@@ -11,11 +11,11 @@
 
 import * as vscode from "vscode";
 import { SessionManager } from "./sessionManager";
-import { QueueWriter } from "./queueWriter";
+import { HTTPQueueWriter } from "./httpQueueWriter";
 import { ExtensionConfig, loadExtensionConfig } from "./config";
 
 let sessionManager: SessionManager | undefined;
-let queueWriter: QueueWriter | undefined;
+let queueWriter: HTTPQueueWriter | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 
 /**
@@ -35,7 +35,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Initialize components
     try {
-      queueWriter = new QueueWriter(config);
+      queueWriter = new HTTPQueueWriter(config);
       sessionManager = new SessionManager(context, config, queueWriter);
     } catch (error) {
       console.error("Failed to initialize Blueplane components:", error);
@@ -47,19 +47,19 @@ export async function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    // Initialize Redis connection
+    // Initialize HTTP queue writer
     try {
-      const redisConnected = await queueWriter.initialize();
-      if (!redisConnected) {
+      const initialized = await queueWriter.initialize();
+      if (!initialized) {
         vscode.window.showWarningMessage(
-          "Blueplane: Could not connect to Redis. Telemetry will not be captured."
+          "Blueplane: Invalid server configuration. Telemetry will not be captured."
         );
         return;
       }
     } catch (error) {
-      console.error("Failed to connect to Redis:", error);
+      console.error("Failed to initialize HTTP queue writer:", error);
       vscode.window.showWarningMessage(
-        `Blueplane: Redis connection failed. Telemetry will not be captured. Error: ${
+        `Blueplane: HTTP queue writer initialization failed. Telemetry will not be captured. Error: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
@@ -186,7 +186,7 @@ export async function deactivate() {
     sessionManager.stopSession();
   }
 
-  // Disconnect from Redis
+  // Disconnect HTTP queue writer (no-op for HTTP, but kept for API compatibility)
   if (queueWriter) {
     await queueWriter.disconnect();
   }
@@ -215,17 +215,13 @@ function loadConfiguration(): ExtensionConfig {
     // Enabled is primarily controlled by VSCode setting
     enabled: vsConfig.get<boolean>("enabled", baseConfig.enabled),
 
-    redis: {
-      host: vsConfig.get<string>("redisHost", baseConfig.redis.host),
-      port: vsConfig.get<number>("redisPort", baseConfig.redis.port),
-    },
+    // Server URL can be overridden via VSCode settings
+    serverUrl: vsConfig.get<string>("serverUrl", baseConfig.serverUrl),
+
+    // HTTP timeout can be overridden via VSCode settings
+    httpTimeout: vsConfig.get<number>("httpTimeout", baseConfig.httpTimeout),
 
     // Other settings use config.yaml values but can be overridden
-    connectTimeout: vsConfig.get<number>("connectTimeout", baseConfig.connectTimeout),
-    maxReconnectAttempts: vsConfig.get<number>("maxReconnectAttempts", baseConfig.maxReconnectAttempts),
-    reconnectBackoffBase: vsConfig.get<number>("reconnectBackoffBase", baseConfig.reconnectBackoffBase),
-    reconnectBackoffMax: vsConfig.get<number>("reconnectBackoffMax", baseConfig.reconnectBackoffMax),
-    streamTrimThreshold: vsConfig.get<number>("streamTrimThreshold", baseConfig.streamTrimThreshold),
     sessionDirectory: vsConfig.get<string>("sessionDirectory", baseConfig.sessionDirectory),
     hashTruncateLength: vsConfig.get<number>("hashTruncateLength", baseConfig.hashTruncateLength),
   };

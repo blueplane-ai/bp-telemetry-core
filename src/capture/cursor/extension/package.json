@@ -38,15 +38,15 @@
           "default": true,
           "description": "Enable Blueplane telemetry capture"
         },
-        "blueplane.redisHost": {
+        "blueplane.serverUrl": {
           "type": "string",
-          "default": "localhost",
-          "description": "Redis server host"
+          "default": "http://127.0.0.1:8787",
+          "description": "Blueplane server URL for HTTP event submission"
         },
-        "blueplane.redisPort": {
+        "blueplane.httpTimeout": {
           "type": "number",
-          "default": 6379,
-          "description": "Redis server port"
+          "default": 1000,
+          "description": "HTTP request timeout in milliseconds"
         }
       }
     }
@@ -73,7 +73,6 @@
     "typescript": "^5.1.0"
   },
   "dependencies": {
-    "js-yaml": "^4.1.0",
-    "redis": "^5.0.0"
+    "js-yaml": "^4.1.0"
   }
 }
