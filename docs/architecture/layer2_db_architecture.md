@@ -739,7 +739,7 @@ class DatabaseHealthMonitor:
             - wal_size_mb, integrity_check
         - redis:
             - memory_mb
-            - stream_queue_depth (telemetry:events, cdc:events)
+            - stream_queue_depth (telemetry:message_queue, cdc:events)
             - lag_ms (oldest unprocessed message)
             - timeseries_count
         """

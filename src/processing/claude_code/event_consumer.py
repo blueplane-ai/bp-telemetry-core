@@ -20,7 +20,7 @@ import redis
 from ..common.batch_manager import BatchManager
 from ..common.cdc_publisher import CDCPublisher
 from .raw_traces_writer import ClaudeRawTracesWriter
-from ...capture.shared.redis_streams import TELEMETRY_EVENTS_STREAM, TELEMETRY_DLQ_STREAM
+from ...capture.shared.redis_streams import TELEMETRY_MESSAGE_QUEUE_STREAM, TELEMETRY_DLQ_STREAM
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class ClaudeEventConsumer:
         redis_client: redis.Redis,
         claude_writer: ClaudeRawTracesWriter,
         cdc_publisher: CDCPublisher,
-        stream_name: str = TELEMETRY_EVENTS_STREAM,
+        stream_name: str = TELEMETRY_MESSAGE_QUEUE_STREAM,
         consumer_group: str = "processors",
         consumer_name: str = "claude-consumer-1",
         batch_size: int = 100,

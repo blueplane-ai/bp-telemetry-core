@@ -109,7 +109,7 @@ CREATE INDEX idx_cursor_timestamp ON cursor_raw_traces(timestamp DESC);
 │             ▼                               ▼               │
 │        ┌────────────────────────────────────────┐          │
 │        │        Redis Streams Queue            │          │
-│        │      telemetry:events                 │          │
+│        │      telemetry:message_queue                 │          │
 │        └────────────────┬───────────────────────┘          │
 │                         │                                   │
 │                         ▼                                   │
@@ -341,7 +341,7 @@ GROUP BY external_session_id;
 │       │ (hooks fire on actions)             │ (every 30s)      │
 │       ▼                                      ▼                  │
 │  ┌──────────────────────────────────────────────────┐          │
-│  │         Redis Streams: telemetry:events          │          │
+│  │         Redis Streams: telemetry:message_queue          │          │
 │  │  [Hook Events] + [Database Trace Events]         │          │
 │  └──────────────────────┬───────────────────────────┘          │
 │                         │                                       │

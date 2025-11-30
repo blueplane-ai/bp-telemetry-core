@@ -94,7 +94,7 @@ python scripts/server_ctl.py start --daemon
 # Check extension is active in Cursor: Extensions → Blueplane Telemetry
 # Check processing server: python scripts/server_ctl.py status
 # View logs: tail -f ~/.blueplane/server.log
-# Monitor Redis: redis-cli XLEN telemetry:events
+# Monitor Redis: redis-cli XLEN telemetry:message_queue
 ```
 
 ### Installation (Claude Code)
@@ -156,10 +156,10 @@ python scripts/server_ctl.py status --verbose
 tail -f ~/.blueplane/server.log
 
 # Check Redis queue
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 
 # View recent events
-redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+redis-cli XREAD COUNT 5 STREAMS telemetry:message_queue 0-0
 ```
 
 ### Verification (Claude Code)
@@ -174,10 +174,10 @@ cat ~/.claude/settings.json | grep -A 5 "hooks"
 tail -f ~/.blueplane/server.log
 
 # Check Redis queue
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 
 # View recent events
-redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+redis-cli XREAD COUNT 5 STREAMS telemetry:message_queue 0-0
 
 # Check SQLite database (events are stored here)
 python -c "
@@ -204,10 +204,10 @@ After installation, the extension and database monitor will automatically captur
 
 ```bash
 # Check Redis queue
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 
 # View recent events
-redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+redis-cli XREAD COUNT 5 STREAMS telemetry:message_queue 0-0
 
 # Check SQLite database (events are stored here)
 python -c "

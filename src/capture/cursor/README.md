@@ -80,7 +80,7 @@ privacy:
     - file_paths
 
 stream:
-  name: telemetry:events
+  name: telemetry:message_queue
   max_length: 10000
 ```
 
@@ -207,7 +207,7 @@ Should show session info for each workspace.
 ### Monitor Redis Events
 
 ```bash
-redis-cli XREAD COUNT 10 STREAMS telemetry:events 0
+redis-cli XREAD COUNT 10 STREAMS telemetry:message_queue 0
 ```
 
 ### Check Database Monitor
@@ -289,8 +289,8 @@ rm -rf ~/.blueplane/cursor-session
 
 3. Check Redis for events:
    ```bash
-   redis-cli XLEN telemetry:events
-   redis-cli XREAD COUNT 1 STREAMS telemetry:events 0-0
+   redis-cli XLEN telemetry:message_queue
+   redis-cli XREAD COUNT 1 STREAMS telemetry:message_queue 0-0
    ```
 
 ### Extending the Extension

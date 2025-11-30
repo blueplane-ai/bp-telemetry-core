@@ -276,7 +276,7 @@ Deduplication ensures the same transcript is not processed twice.
 
 2. Check stream exists:
    ```bash
-   redis-cli XLEN telemetry:events
+   redis-cli XLEN telemetry:message_queue
    ```
 
 3. Test queue writer:

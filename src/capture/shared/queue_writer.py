@@ -140,7 +140,7 @@ class MessageQueueWriter:
         2. Generate event_id (UUID)
         3. Add enqueued_at timestamp
         4. Flatten event to Redis hash format
-        5. XADD to telemetry:events with MAXLEN ~10000
+        5. XADD to telemetry:message_queue with MAXLEN ~10000
         6. Return success/failure (never raises exceptions)
         """
         # Early return if Redis not available

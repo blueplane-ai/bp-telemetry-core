@@ -24,7 +24,7 @@ from .session_persistence import (
     DatabaseError
 )
 from ..database.sqlite_client import SQLiteClient
-from ...capture.shared.redis_streams import TELEMETRY_EVENTS_STREAM
+from ...capture.shared.redis_streams import TELEMETRY_MESSAGE_QUEUE_STREAM
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ class SessionMonitor:
         self,
         redis_client: redis.Redis,
         sqlite_client: Optional[SQLiteClient] = None,
-        stream_name: str = TELEMETRY_EVENTS_STREAM,
+        stream_name: str = TELEMETRY_MESSAGE_QUEUE_STREAM,
         consumer_group: str = "cursor_session_monitors",
         consumer_name: str = "cursor_session_monitor",
     ):
@@ -402,7 +402,7 @@ class SessionMonitor:
         """
         Listen to session_start/end events from Redis stream using consumer groups.
 
-        Reads from telemetry:events stream, filters for Cursor session events.
+        Reads from telemetry:message_queue stream, filters for Cursor session events.
         ACKs messages after successful processing.
         """
         logger.info("Cursor session monitor: Starting to listen for new Redis events...")

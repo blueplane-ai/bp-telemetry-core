@@ -134,7 +134,7 @@ All captured events follow a standard format:
 Events are written to **Redis Streams**:
 
 ```
-Redis Stream: "telemetry:events"
+Redis Stream: "telemetry:message_queue"
   Consumer Group: "processors"
     Consumers: fast-path-1, fast-path-2, ...
 
@@ -321,7 +321,7 @@ sequenceDiagram
     participant CLI as Layer 3 CLI
 
     IDE->>Hook: Tool execution event
-    Hook->>MQ: XADD to telemetry:events
+    Hook->>MQ: XADD to telemetry:message_queue
     MQ->>Fast: XREADGROUP (blocking)
     Fast->>Fast: Compress events
     Fast->>SQLite: Batch insert (100 events, compressed)
@@ -494,7 +494,7 @@ CREATE TABLE conversations (
 
 **Data Structures:**
 
-- **Streams (MQ)**: `telemetry:events` - Main message queue with consumer groups
+- **Streams (MQ)**: `telemetry:message_queue` - Main message queue with consumer groups
 - **Streams (DLQ)**: `telemetry:dlq` - Dead letter queue for failed messages
 - **Streams (CDC)**: `cdc:events` - Change data capture for worker coordination
 - **TimeSeries**: Metrics with automatic downsampling
@@ -504,7 +504,7 @@ CREATE TABLE conversations (
 **Message Queue Streams:**
 
 ```
-Stream: telemetry:events (main queue)
+Stream: telemetry:message_queue (main queue)
   - Consumer Group: processors
   - Max Length: ~10,000 (approximate trim)
   - Retention: Until processed + 1 hour
