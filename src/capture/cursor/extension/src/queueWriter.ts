@@ -15,9 +15,9 @@ import { randomUUID } from "crypto";
 
 /**
  * Redis stream name for telemetry events
- * Hardcoded as it's not configurable per schema
+ * Must match TELEMETRY_MESSAGE_QUEUE_STREAM in src/capture/shared/redis_streams.py
  */
-const TELEMETRY_STREAM_NAME = "telemetry:events";
+const TELEMETRY_STREAM_NAME = "telemetry:message_queue";
 
 export class QueueWriter {
   private client: RedisClientType | null = null;
