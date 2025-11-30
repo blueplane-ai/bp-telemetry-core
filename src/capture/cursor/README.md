@@ -38,34 +38,109 @@ Cursor telemetry is captured through two mechanisms:
 ### Prerequisites
 
 - Cursor IDE installed
+- Node.js 18+ and npm
 - Python 3.11+
 - Redis server running (localhost:6379)
 
-### 1. Install Extension
+### Quick Install (Recommended)
+
+Use the automated install script:
+
+```bash
+# From project root
+./scripts/install_cursor_extension.sh
+
+# Dry run mode (preview changes without installing)
+./scripts/install_cursor_extension.sh --dry-run
+
+# Show help
+./scripts/install_cursor_extension.sh --help
+```
+
+This script will:
+1. Check prerequisites (Node.js, npm, Cursor CLI, config files)
+2. Install npm dependencies
+3. Compile TypeScript
+4. Copy configuration files
+5. Package the extension as VSIX
+6. Install in Cursor automatically
+
+**Tip:** Use `--dry-run` to preview what will be done before running the actual installation.
+
+### Manual Installation
+
+If you prefer manual installation:
 
 ```bash
 cd src/capture/cursor/extension
 npm install
 npm run compile
-# Then install via Cursor: Extensions → Install from VSIX
-# Or: code --install-extension <path-to-vsix>
+npm run copy-config
+npx vsce package
+cursor --install-extension blueplane-cursor-telemetry-*.vsix
+
+# Or install via Cursor UI: Extensions → Install from VSIX
 ```
 
-### 2. Start Redis
+### Start Services
+
+After installing the extension:
+
+1. **Start Redis:**
+   ```bash
+   redis-server
+   ```
+
+2. **Start Processing Server:**
+   ```bash
+   python scripts/server_ctl.py start
+   ```
+
+3. **Restart Cursor** or reload window (Cmd+Shift+P → "Reload Window")
+
+## Uninstallation
+
+Use the automated uninstall script:
 
 ```bash
-redis-server
+# From project root
+./scripts/uninstall_cursor_extension.sh
+
+# Dry run mode (preview what will be removed)
+./scripts/uninstall_cursor_extension.sh --dry-run
+
+# Delete all session data without prompting
+./scripts/uninstall_cursor_extension.sh --all
+
+# Combine flags
+./scripts/uninstall_cursor_extension.sh --dry-run --all
+
+# Show help
+./scripts/uninstall_cursor_extension.sh --help
 ```
 
-### 3. Start Processing Server
+This script will:
+1. Uninstall the extension from Cursor
+2. Optionally remove session data (~/.blueplane/cursor-session/)
+3. Show information about remaining database files
 
-The processing server includes the database monitor that polls Cursor's SQLite database:
+**Tip:** Use `--dry-run` to preview what will be removed before actually uninstalling.
+
+### Manual Uninstallation
 
 ```bash
-python scripts/start_server.py
+# Uninstall extension
+cursor --uninstall-extension blueplane.blueplane-cursor-telemetry
+
+# Or via Cursor UI: Extensions → Blueplane Telemetry → Uninstall
+
+# Optionally remove session data
+rm -rf ~/.blueplane/cursor-session/
 ```
 
-### 4. Configure (Optional)
+## Configuration
+
+### Optional Configuration File
 
 Create `~/.blueplane/config.yaml`:
 
@@ -231,16 +306,6 @@ The extension-based approach supports multiple Cursor workspaces simultaneously:
 5. Database monitor tracks all Cursor instances via PID
 6. All events tagged with workspace_hash and PID
 7. Multiple conversations can occur within each session (stored in `conversations` table with `session_id` reference)
-
-## Uninstallation
-
-```bash
-# Uninstall extension from Cursor
-# Extensions → Blueplane Telemetry → Uninstall
-
-# Remove session files
-rm -rf ~/.blueplane/cursor-session
-```
 
 ## Troubleshooting
 
