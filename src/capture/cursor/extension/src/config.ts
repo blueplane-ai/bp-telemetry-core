@@ -17,34 +17,15 @@ import * as yaml from "js-yaml";
 // TYPE DEFINITIONS
 // =============================================================================
 
-export interface RedisConfig {
-  /** Redis host */
-  host: string;
-  /** Redis port */
-  port: number;
-}
-
 export interface ExtensionConfig {
   /** Enable/disable telemetry capture */
   enabled: boolean;
 
-  /** Redis connection settings */
-  redis: RedisConfig;
+  /** Server URL for HTTP-based event submission */
+  serverUrl: string;
 
-  /** Connection timeout (milliseconds) */
-  connectTimeout: number;
-
-  /** Maximum reconnection attempts */
-  maxReconnectAttempts: number;
-
-  /** Base delay for exponential backoff (milliseconds) */
-  reconnectBackoffBase: number;
-
-  /** Maximum backoff delay (milliseconds) */
-  reconnectBackoffMax: number;
-
-  /** Stream trim threshold (max length) */
-  streamTrimThreshold: number;
+  /** HTTP request timeout (milliseconds) */
+  httpTimeout: number;
 
   /** Session directory relative to home (e.g., ".blueplane/cursor-session") */
   sessionDirectory: string;
@@ -59,15 +40,8 @@ export interface ExtensionConfig {
 
 const DEFAULT_CONFIG: ExtensionConfig = {
   enabled: true,
-  redis: {
-    host: "localhost",
-    port: 6379,
-  },
-  connectTimeout: 5000,
-  maxReconnectAttempts: 3,
-  reconnectBackoffBase: 100,
-  reconnectBackoffMax: 3000,
-  streamTrimThreshold: 10000,
+  serverUrl: "http://127.0.0.1:8787",
+  httpTimeout: 1000, // 1 second timeout for HTTP requests
   sessionDirectory: ".blueplane/cursor-session",
   hashTruncateLength: 16, // Not configurable in config.yaml
 };
@@ -102,33 +76,21 @@ export function loadExtensionConfig(configPath?: string): ExtensionConfig {
 
   // Extract extension-relevant values from the main config
   // Map main config structure to extension config structure
+
+  // Build server URL from http_endpoint config
+  const httpEndpoint = config?.http_endpoint || {};
+  const httpHost = httpEndpoint.host || "127.0.0.1";
+  const httpPort = httpEndpoint.port || 8787;
+  const serverUrl = `http://${httpHost}:${httpPort}`;
+
   return {
     enabled: DEFAULT_CONFIG.enabled, // Extension enabled by default, controlled by VSCode settings
 
-    redis: {
-      host: config?.redis?.connection?.host || DEFAULT_CONFIG.redis.host,
-      port: config?.redis?.connection?.port || DEFAULT_CONFIG.redis.port,
-    },
+    serverUrl: serverUrl,
 
-    connectTimeout:
-      config?.timeouts?.extension?.connect_timeout ||
-      DEFAULT_CONFIG.connectTimeout,
-
-    maxReconnectAttempts:
-      config?.timeouts?.extension?.max_reconnect_attempts ||
-      DEFAULT_CONFIG.maxReconnectAttempts,
-
-    reconnectBackoffBase:
-      config?.timeouts?.extension?.reconnect_backoff_base ||
-      DEFAULT_CONFIG.reconnectBackoffBase,
-
-    reconnectBackoffMax:
-      config?.timeouts?.extension?.reconnect_backoff_max ||
-      DEFAULT_CONFIG.reconnectBackoffMax,
-
-    streamTrimThreshold:
-      config?.streams?.message_queue?.max_length ||
-      DEFAULT_CONFIG.streamTrimThreshold,
+    httpTimeout:
+      config?.timeouts?.extension?.http_timeout ||
+      DEFAULT_CONFIG.httpTimeout,
 
     sessionDirectory:
       stripHomePrefix(config?.paths?.cursor_sessions_dir) ||

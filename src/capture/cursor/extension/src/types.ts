@@ -18,11 +18,12 @@ export interface SessionInfo {
 
 /**
  * Telemetry event for message queue
+ * Uses snake_case to match Python backend conventions
  */
 export interface TelemetryEvent {
   version: string;
-  hookType: string;
-  eventType: string;
+  hook_type: string;
+  event_type: string;
   timestamp: string;
   payload: Record<string, any>;
   metadata?: Record<string, any>;

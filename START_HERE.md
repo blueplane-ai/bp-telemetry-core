@@ -232,7 +232,7 @@ python scripts/server_ctl.py start --daemon
 
 # Or manually check:
 python scripts/server_ctl.py status --verbose
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 ```
 
 ## Step 6: Observation and Data Access
@@ -274,10 +274,10 @@ sqlite3 ~/.blueplane/telemetry.db "
 
 ```bash
 # Check message queue length
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 
 # View consumer group info
-redis-cli XINFO GROUPS telemetry:events
+redis-cli XINFO GROUPS telemetry:message_queue
 ```
 
 #### Monitor Claude Code Sessions
@@ -381,7 +381,7 @@ tail -f ~/.blueplane/server.log
 ls -la ~/.blueplane/telemetry.db
 
 # Check Redis stream
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 ```
 
 ## Step 8: Install Claude Code Skill (Recommended)

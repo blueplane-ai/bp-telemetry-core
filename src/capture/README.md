@@ -32,18 +32,21 @@ Layer 1: Capture
 Core utilities used by all platforms:
 
 - **`queue_writer.py`** - Redis Streams message queue writer
+
   - Fire-and-forget pattern
   - 1-second timeout
   - Silent failure (never blocks IDE)
   - XADD with MAXLEN ~10000
 
 - **`event_schema.py`** - Event validation and schemas
+
   - Platform enum (CURSOR, CLAUDE_CODE)
   - EventType enum (all event types)
   - Event validation
   - Schema enforcement
 
 - **`config.py`** - Configuration management
+
   - Loads YAML configuration
   - Redis connection settings
   - Stream configurations
@@ -67,6 +70,7 @@ TypeScript VSCode extension for Cursor:
 - **`extension.ts`** - Main extension entry point
 
 Features:
+
 - Generates unique session IDs (`curs_{timestamp}_{random}`)
 - Captures telemetry events directly from the IDE
 - Monitors Cursor's `state.vscdb` database
@@ -126,7 +130,7 @@ python scripts/start_server.py
 # 6. Verify installation
 # - Check extension is active in Cursor (if using Cursor)
 # - Check processing server logs
-# - Monitor Redis: redis-cli XLEN telemetry:events
+# - Monitor Redis: redis-cli XLEN telemetry:message_queue
 ```
 
 ### Manual Installation
@@ -149,7 +153,7 @@ redis:
 
 streams:
   message_queue:
-    name: telemetry:events
+    name: telemetry:message_queue
     consumer_group: processors
     max_length: 10000
 ```
@@ -160,7 +164,7 @@ Privacy controls:
 
 ```yaml
 privacy:
-  mode: strict  # strict | balanced | development
+  mode: strict # strict | balanced | development
 
   sanitization:
     hash_file_paths: true
@@ -184,7 +188,7 @@ Event Builder Executes
     └─ Call MessageQueueWriter.enqueue()
         ↓
 Redis Streams (XADD)
-    ├─ Stream: telemetry:events
+    ├─ Stream: telemetry:message_queue
     ├─ Consumer Group: processors
     └─ Auto-trim: MAXLEN ~10000
         ↓
@@ -231,8 +235,8 @@ See [Claude Code README](claude_code/README.md) for details on adding hooks for 
 
 ```bash
 # Check Redis queue for events from Cursor extension
-redis-cli XLEN telemetry:events
-redis-cli XREAD COUNT 1 STREAMS telemetry:events 0-0
+redis-cli XLEN telemetry:message_queue
+redis-cli XREAD COUNT 1 STREAMS telemetry:message_queue 0-0
 
 # View extension logs in Cursor
 # View > Output > Select "Blueplane Telemetry"
@@ -257,7 +261,7 @@ redis-cli XREAD COUNT 1 STREAMS telemetry:events 0-0
 ### Events not reaching Redis
 
 1. Verify Redis is running: `redis-cli PING`
-2. Check streams exist: `redis-cli XLEN telemetry:events`
+2. Check streams exist: `redis-cli XLEN telemetry:message_queue`
 3. Test queue writer:
    ```python
    from capture.shared.queue_writer import MessageQueueWriter
@@ -275,11 +279,11 @@ redis-cli XREAD COUNT 1 STREAMS telemetry:events 0-0
 
 ### Target Metrics
 
-| Metric | Target | Actual |
-|--------|--------|--------|
-| Event capture | <1ms P95 | ~0.5ms |
-| Redis XADD | <1ms P95 | ~0.3ms |
-| Total overhead | <2ms P95 | ~1ms |
+| Metric         | Target   | Actual |
+| -------------- | -------- | ------ |
+| Event capture  | <1ms P95 | ~0.5ms |
+| Redis XADD     | <1ms P95 | ~0.3ms |
+| Total overhead | <2ms P95 | ~1ms   |
 
 ### Optimization
 
@@ -324,6 +328,7 @@ For issues or questions:
 ---
 
 **Status**: ✅ Implementation Complete
+
 - Shared components implemented
 - Cursor extension implemented (event capture + database monitoring)
 - Claude Code hooks implemented (7 scripts)

@@ -95,7 +95,7 @@ def initialize_streams(host: str, port: int) -> bool:
 
         # Define streams and consumer groups
         streams = [
-            ('telemetry:events', 'processors'),
+            ('telemetry:message_queue', 'processors'),
             ('cdc:events', 'workers'),
         ]
 
@@ -131,7 +131,7 @@ def verify_setup(host: str, port: int) -> bool:
         print("\n🔍 Verifying Redis setup...")
 
         # Check streams exist
-        streams = ['telemetry:events', 'cdc:events']
+        streams = ['telemetry:message_queue', 'cdc:events']
         for stream in streams:
             try:
                 info = client.xinfo_stream(stream)
@@ -142,7 +142,7 @@ def verify_setup(host: str, port: int) -> bool:
 
         # Check consumer groups
         groups = [
-            ('telemetry:events', 'processors'),
+            ('telemetry:message_queue', 'processors'),
             ('cdc:events', 'workers'),
         ]
         for stream, group in groups:

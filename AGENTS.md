@@ -508,10 +508,10 @@ const pollInterval = config.monitoring.cursor_database.poll_interval;
 
 ```bash
 # Check message queue status
-redis-cli XINFO STREAM telemetry:events
+redis-cli XINFO STREAM telemetry:message_queue
 
 # View pending messages
-redis-cli XPENDING telemetry:events workers
+redis-cli XPENDING telemetry:message_queue workers
 
 # Monitor worker health
 redis-cli GET telemetry:worker:health
@@ -561,7 +561,7 @@ sqlite3 ~/Library/Application\ Support/Cursor/User/workspaceStorage/*/state.vscd
 
 ### High Memory Usage
 
-- Check Redis stream length: `XLEN telemetry:events`
+- Check Redis stream length: `XLEN telemetry:message_queue`
 - Verify slow path workers are running
 - Consider increasing batch size in fast path
 

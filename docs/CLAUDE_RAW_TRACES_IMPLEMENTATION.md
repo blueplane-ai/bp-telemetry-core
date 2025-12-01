@@ -323,7 +323,7 @@ async def _catch_up_historical_events(self):
         while True:
             # Read batch of historical events
             messages = self.redis_client.xread(
-                {"telemetry:events": last_id},
+                {"telemetry:message_queue": last_id},
                 count=1000,
                 block=0  # Non-blocking
             )

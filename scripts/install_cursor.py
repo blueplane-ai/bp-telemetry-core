@@ -160,7 +160,7 @@ def main():
     print("     # verify_installation.py is deprecated - use manual checks:")
     print("     # - Check extension status in Cursor")
     print("     # - Check processing server: ps aux | grep start_server.py")
-    print("     # - Monitor Redis: redis-cli PING && redis-cli XLEN telemetry:events")
+    print("     # - Monitor Redis: redis-cli PING && redis-cli XLEN telemetry:message_queue")
     print("\n📝 Note: This script is DEPRECATED - hooks have been removed")
 
     return 0

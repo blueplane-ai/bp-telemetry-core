@@ -42,6 +42,18 @@ try:
 except ImportError:
     HAS_CONFIG = False
 
+try:
+    from src.capture.shared.redis_streams import (
+        TELEMETRY_MESSAGE_QUEUE_STREAM,
+        CDC_EVENTS_STREAM,
+    )
+    HAS_STREAM_CONSTANTS = True
+except ImportError:
+    HAS_STREAM_CONSTANTS = False
+    # Fallback values if import fails
+    TELEMETRY_MESSAGE_QUEUE_STREAM = "telemetry:message_queue"
+    CDC_EVENTS_STREAM = "cdc:events"
+
 
 class ServerController:
     """Controls Blueplane Telemetry processing server lifecycle."""
@@ -302,7 +314,7 @@ class ServerController:
 
             # Check for our streams
             streams = {}
-            for stream_name in ["telemetry:message_queue", "telemetry:cdc"]:
+            for stream_name in [TELEMETRY_MESSAGE_QUEUE_STREAM, CDC_EVENTS_STREAM]:
                 try:
                     length = client.xlen(stream_name)
                     streams[stream_name] = {"length": length}

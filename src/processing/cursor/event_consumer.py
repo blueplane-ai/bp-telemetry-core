@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import List, Tuple, Optional, Callable
 import redis
 
-from ...capture.shared.redis_streams import TELEMETRY_EVENTS_STREAM
+from ...capture.shared.redis_streams import TELEMETRY_MESSAGE_QUEUE_STREAM
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class EventConsumer:
     def __init__(
         self,
         redis_client: redis.Redis,
-        stream_name: str = TELEMETRY_EVENTS_STREAM,
+        stream_name: str = TELEMETRY_MESSAGE_QUEUE_STREAM,
         consumer_group: str = "processors",
         consumer_name: Optional[str] = None,
         persist_after_ack: bool = False,

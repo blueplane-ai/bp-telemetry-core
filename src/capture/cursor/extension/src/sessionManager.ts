@@ -12,7 +12,7 @@
 import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { SessionInfo } from './types';
-import { QueueWriter } from './queueWriter';
+import { HTTPQueueWriter } from './httpQueueWriter';
 import { ExtensionConfig } from './config';
 
 export class SessionManager {
@@ -21,14 +21,25 @@ export class SessionManager {
   constructor(
     private context: vscode.ExtensionContext,
     private config: ExtensionConfig,
-    private queueWriter?: QueueWriter
+    private queueWriter?: HTTPQueueWriter
   ) {}
 
   /**
    * Start a new session
+   *
+   * Note: With workspaceContains activation event, workspace should always
+   * be available during initial activation. This check remains for runtime
+   * edge cases (e.g., after workspace folders are removed).
    */
-  startNewSession(): SessionInfo {
+  startNewSession(): SessionInfo | null {
     const workspacePath = this.getWorkspacePath();
+
+    // Skip session creation if workspace is not available
+    if (!workspacePath) {
+      console.log('Workspace not available, skipping session creation');
+      return null;
+    }
+
     const sessionId = this.generateSessionId();
     const workspaceHash = this.computeWorkspaceHash(workspacePath);
 
@@ -45,7 +56,7 @@ export class SessionManager {
     // Store in extension context
     this.context.workspaceState.update('currentSession', this.currentSession);
 
-    // Send session start event to Redis
+    // Send session start event
     this.sendSessionEvent('start', sessionId, workspaceHash, workspacePath);
 
     console.log(`Started new Blueplane session: ${sessionId}`);
@@ -58,13 +69,19 @@ export class SessionManager {
    */
   stopSession(): void {
     if (this.currentSession) {
-      // Send session end event to Redis
-      this.sendSessionEvent(
-        'end',
-        this.currentSession.sessionId,
-        this.currentSession.workspaceHash,
-        this.getWorkspacePath()
-      );
+      const workspacePath = this.getWorkspacePath();
+
+      // Only send session end event if workspace is still available
+      if (workspacePath) {
+        this.sendSessionEvent(
+          'end',
+          this.currentSession.sessionId,
+          this.currentSession.workspaceHash,
+          workspacePath
+        );
+      } else {
+        console.log('Workspace unavailable, skipping session_end event');
+      }
 
       console.log(`Stopped Blueplane session: ${this.currentSession.sessionId}`);
       this.currentSession = null;
@@ -100,11 +117,12 @@ export class SessionManager {
 
   /**
    * Get workspace path
+   * Returns null if no workspace is open
    */
-  private getWorkspacePath(): string {
+  private getWorkspacePath(): string | null {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) {
-      return '/unknown';
+      return null;
     }
     return folders[0].uri.fsPath;
   }
@@ -192,8 +210,8 @@ export class SessionManager {
     // Build session event (use snake_case for consistency with Python hooks)
     const event = {
       version: '0.1.0',
-      hookType: 'session',
-      eventType: `session_${eventType}`,
+      hook_type: 'session',
+      event_type: `session_${eventType}`,
       timestamp: new Date().toISOString(),
       payload: {
         workspace_path: workspacePath,

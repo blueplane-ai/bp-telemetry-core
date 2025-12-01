@@ -43,7 +43,7 @@ graph TB
         MQW2 -->|Write| MQ
 
         subgraph "Message Queue System (Redis Streams)"
-            MQ --> Events[telemetry:events<br/>Stream]
+            MQ --> Events[telemetry:message_queue<br/>Stream]
             Events --> Processors[Consumer Group:<br/>processors]
             Processors --> CDC[CDC Stream]
             Events --> DLQ[telemetry:dlq<br/>Dead Letter Queue]
@@ -67,7 +67,7 @@ graph TB
 
 **Stream Structure**:
 ```
-Main Queue: telemetry:events
+Main Queue: telemetry:message_queue
   - Consumer Group: processors
   - Max Length: ~10,000 (approximate trim)
   - Consumers: fast-path-1, fast-path-2, ...
@@ -133,12 +133,12 @@ class MessageQueueWriter:
 
     def enqueue(event: dict, platform: str, session_id: str) -> bool:
         """
-        Write event to Redis Streams telemetry:events.
+        Write event to Redis Streams telemetry:message_queue.
 
         - Generate event_id (UUID)
         - Add enqueued_at timestamp
         - Flatten event dict to Redis hash format
-        - XADD to 'telemetry:events' stream with MAXLEN ~10000
+        - XADD to 'telemetry:message_queue' stream with MAXLEN ~10000
         - Return true on success, false on failure
         - Fail silently on error (hooks must not block IDE)
         - Timeout after 1 second
@@ -166,7 +166,7 @@ def enqueue(event: dict, platform: str, session_id: str) -> bool:
 
         # Write to Redis Streams with auto-trim
         redis.xadd(
-            name='telemetry:events',
+            name='telemetry:message_queue',
             fields=stream_entry,
             maxlen=10000,
             approximate=True  # Efficient approximate trimming
@@ -433,8 +433,8 @@ python scripts/start_server.py
 ps aux | grep start_server.py
 
 # Monitor Redis for events
-redis-cli XLEN telemetry:events
-redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+redis-cli XLEN telemetry:message_queue
+redis-cli XREAD COUNT 5 STREAMS telemetry:message_queue 0-0
 
 # Expected: Events appearing in Redis stream
 # ✅ Database monitor active
@@ -465,7 +465,7 @@ class UniversalInstaller:
        - Check if Redis is installed (redis-cli --version)
        - If not found, provide installation instructions
        - Start Redis server if not running
-       - Create consumer groups: XGROUP CREATE telemetry:events processors
+       - Create consumer groups: XGROUP CREATE telemetry:message_queue processors
     3. install_claude():
        - Copy hooks/*.py to ~/.claude/hooks/telemetry/
        - Update ~/.claude/settings.json with hook configuration

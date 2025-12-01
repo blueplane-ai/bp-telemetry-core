@@ -33,7 +33,7 @@ graph TB
     end
 
     subgraph "External Systems"
-        RedisStream[Redis Stream<br/>telemetry:events]
+        RedisStream[Redis Stream<br/>telemetry:message_queue]
         CursorDB[(Cursor SQLite DBs<br/>state.vscdb)]
         Extension[Cursor Extension<br/>Sends session_start events]
     end
@@ -160,7 +160,7 @@ class SessionMonitor:
         """
         PRIMARY: Listen to session_start/end events from Redis stream.
 
-        Reads from telemetry:events stream, filters for session events.
+        Reads from telemetry:message_queue stream, filters for session events.
         More reliable than file watching.
         """
         try:
@@ -168,7 +168,7 @@ class SessionMonitor:
                 try:
                     # Read from stream (non-blocking, 1 second timeout)
                     messages = self.redis_client.xread(
-                        {"telemetry:events": self.last_redis_id},
+                        {"telemetry:message_queue": self.last_redis_id},
                         count=100,
                         block=1000  # 1 second block
                     )
@@ -925,7 +925,7 @@ class CursorDatabaseMonitor:
 
             # Send to Redis
             self.redis_client.xadd(
-                "telemetry:events",
+                "telemetry:message_queue",
                 {
                     k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
                     for k, v in event.items()
@@ -1375,7 +1375,7 @@ class CursorDatabaseMonitor:
 
             # Send to Redis
             self.redis_client.xadd(
-                "telemetry:events",
+                "telemetry:message_queue",
                 {
                     k: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
                     for k, v in event.items()

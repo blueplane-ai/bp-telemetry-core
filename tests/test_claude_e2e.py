@@ -534,7 +534,7 @@ def check_prerequisites() -> bool:
     # Check if telemetry server is running (check for consumer group)
     try:
         r = redis.Redis(host='localhost', port=6379, db=0)
-        groups = r.xinfo_groups('telemetry:events')
+        groups = r.xinfo_groups('telemetry:message_queue')
         if any(g[b'name'] == b'processors' for g in groups):
             print("✓ Telemetry server appears to be configured")
         else:

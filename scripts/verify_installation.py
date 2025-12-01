@@ -63,13 +63,13 @@ def check_redis_connection() -> bool:
 
         # Check streams
         try:
-            info = client.xinfo_stream('telemetry:events')
-            print(f"   ✅ Stream 'telemetry:events' exists")
+            info = client.xinfo_stream('telemetry:message_queue')
+            print(f"   ✅ Stream 'telemetry:message_queue' exists")
         except:
-            print(f"   ⚠️  Stream 'telemetry:events' not found (run init_redis.py)")
+            print(f"   ⚠️  Stream 'telemetry:message_queue' not found (run init_redis.py)")
 
         try:
-            groups = client.xinfo_groups('telemetry:events')
+            groups = client.xinfo_groups('telemetry:message_queue')
             print(f"   ✅ Consumer groups configured")
         except:
             print(f"   ⚠️  Consumer groups not found (run init_redis.py)")

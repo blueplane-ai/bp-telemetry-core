@@ -205,7 +205,7 @@ class TelemetryServer:
         """Initialize fast path consumer."""
         logger.info("Initializing fast path consumer")
 
-        stream_config = self.config.get_stream_config("events")
+        stream_config = self.config.get_stream_config("message_queue")
         cdc_config = self.config.get_stream_config("cdc")
         
         # Create CDC publisher
@@ -250,8 +250,8 @@ class TelemetryServer:
         logger.info("Initializing HTTP endpoint for hook events")
 
         # Create queue writer for the HTTP endpoint
-        # Use "events" stream (telemetry:events) for hook events
-        self.queue_writer = MessageQueueWriter(self.config, stream_type="events")
+        # Use "message_queue" stream for hook events (same stream session_monitor reads from)
+        self.queue_writer = MessageQueueWriter(self.config, stream_type="message_queue")
 
         # Get configuration from config.yaml (SERVER side)
         host = http_config.get("host", "127.0.0.1")
@@ -416,7 +416,8 @@ class TelemetryServer:
         # Pass sqlite_client for database persistence
         self.claude_session_monitor = ClaudeCodeSessionMonitor(
             redis_client=self.redis_client,
-            sqlite_client=self.sqlite_client
+            sqlite_client=self.sqlite_client,
+            stream_name=stream_config.name,
         )
         
         # Create timeout manager for abandoned sessions

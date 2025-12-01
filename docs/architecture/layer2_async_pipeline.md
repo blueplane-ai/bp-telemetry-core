@@ -44,7 +44,7 @@ graph TB
     end
 
     subgraph "Message Queue (Redis Streams)"
-        MQSTREAM[telemetry:events<br/>Stream]
+        MQSTREAM[telemetry:message_queue<br/>Stream]
         DLQ[telemetry:dlq<br/>Dead Letter Queue]
     end
 
@@ -120,7 +120,7 @@ class EventConsumer:
 
     batch_size = 100
     batch_timeout = 0.1  # 100ms
-    stream_name = 'telemetry:events'
+    stream_name = 'telemetry:message_queue'
     consumer_group = 'processors'
     consumer_name = 'fast-path-1'
 
