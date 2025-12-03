@@ -756,7 +756,7 @@ class UserLevelListener:
         """Extract relevant fields from composer data."""
         # Note: workspaceId does not exist in globalStorage composerData
         # Workspace correlation must be done via other means
-        return {
+        fields = {
             "composerId": data.get("composerId"),
             "createdAt": data.get("createdAt"),
             "unifiedMode": data.get("unifiedMode"),
@@ -765,6 +765,40 @@ class UserLevelListener:
             "tokenCount": data.get("tokenCount"),
             "status": data.get("status"),
         }
+        
+        # Extract model usage from usageData field
+        # The model name is stored as the KEY of the usageData dictionary!
+        # Example: {"claude-4.5-opus-high-thinking": {"costInCents": 141, "amount": 23}}
+        usage_data = data.get("usageData", {})
+        if usage_data and isinstance(usage_data, dict):
+            model_names = list(usage_data.keys())
+            if model_names:
+                # Use primary model (highest cost if multiple)
+                if len(model_names) == 1:
+                    primary_model = model_names[0]
+                else:
+                    primary_model = max(
+                        model_names,
+                        key=lambda m: usage_data.get(m, {}).get("costInCents", 0)
+                    )
+                
+                primary_stats = usage_data.get(primary_model, {})
+                fields["modelName"] = primary_model
+                fields["modelCostCents"] = primary_stats.get("costInCents")
+                fields["modelResponseCount"] = primary_stats.get("amount")
+                
+                # Include all models if multiple
+                if len(model_names) > 1:
+                    fields["modelsUsed"] = model_names
+                    # Calculate totals
+                    fields["totalCostCents"] = sum(
+                        s.get("costInCents", 0) for s in usage_data.values() if isinstance(s, dict)
+                    )
+                    fields["totalModelResponses"] = sum(
+                        s.get("amount", 0) for s in usage_data.values() if isinstance(s, dict)
+                    )
+        
+        return fields
 
     async def _sync_bubble_data(self):
         """
