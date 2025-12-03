@@ -19,24 +19,23 @@ If Git unavailable or merge-base fails.
 
 ---
 
-## Data Access
+## Data Access (Combined Platforms)
 
 **Database**: `~/.blueplane/telemetry.db`
 
-### Workspace Filtering
+- **Claude Code** (`claude_raw_traces`):
+  - Filter by `cwd LIKE '/path/to/workspace%'`
+  - Tokens: `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`
+  - Model: `message_model`, Role: `message_role`, Branch: `git_branch`
 
-Bubbles have empty `workspace_hash`. Join via `composer_id`:
+- **Cursor** (`cursor_sessions` + `cursor_raw_traces`):
+  - Get `composer_id`s from `cursor_sessions` for the workspace (`workspace_path LIKE '/path/to/workspace%'`)
+  - Bubbles: filter by composer_id extracted from `item_key = "bubbleId:{composerId}:{bubbleId}"`
+  - Tokens: `token_count_up_until_here` (cumulative only; use for activity, not precise totals)
+  - Message type: `message_type` (often NULL; use heuristics)
+  - Model: **not stored** (always treated as unknown)
 
-1. Get `composer_id`s from composers with target `workspace_hash`
-2. Extract `composer_id` from bubble `item_key`: `bubbleId:{composerId}:{bubbleId}`
-3. Filter bubbles to matching composer_ids
-
-### Platform Limitations
-
-| Field | Cursor | Claude Code |
-|-------|--------|-------------|
-| Tokens | ✅ | ✅ |
-| Model | ❌ Not stored | ✅ |
+For full schema details, see the **Data Access / Schema Reference** section in `telemetry-insights/SKILL.md`. This skill uses the same combined Cursor + Claude access patterns, but scoped to the PR branch window.
 
 ---
 
@@ -44,10 +43,34 @@ Bubbles have empty `workspace_hash`. Join via `composer_id`:
 
 ```json
 {
-  "window": { "analysis_scope": "branch_pr|time_period", "branch_name": "...", "branch_start": "..." },
-  "activity": { "total_prompts": N, "total_ai_responses": N, "active_days": N, "sessions": N },
-  "tokens": { "total_input": N, "total_output": N, "ratio": "X.XX", "per_day": {...} },
-  "sessions": { "short": N, "long": N, "avg_prompts_per_session": N }
+  "window": {
+    "analysis_scope": "branch_pr|time_period",
+    "branch_name": "...",
+    "branch_start": "YYYY-MM-DD",
+    "days_active": N
+  },
+  "activity": {
+    "total_prompts": N,
+    "total_responses": N,
+    "breakdown": {
+      "claude_code": {"prompts": N, "responses": N},
+      "cursor": {"prompts": N, "responses": N}
+    },
+    "active_days": N
+  },
+  "tokens": {
+    "note": "Claude Code only - Cursor does not provide per-message token counts",
+    "total_input": N,
+    "total_output": N,
+    "ratio": X.XX
+  },
+  "models": {
+    "note": "Claude Code only - Cursor does not persist model names",
+    "breakdown": {"model-name": N}
+  },
+  "daily": {
+    "YYYY-MM-DD": {"input": N, "output": N, "prompts": N}
+  }
 }
 ```
 
@@ -55,9 +78,10 @@ Bubbles have empty `workspace_hash`. Join via `composer_id`:
 
 ## Derived Insights (3-5 max)
 
-- **Efficiency**: overall ratio, assessment (low/normal/high)
-- **Activity Pattern**: steady/bursty/spiky
+- **Efficiency**: token ratio, cache usage, assessment (Claude Code only)
+- **Activity Pattern**: steady/bursty/spiky, platform distribution
 - **Model Strategy**: dominant model, cost awareness (Claude Code only)
+- **Platform Usage**: Claude Code vs Cursor breakdown, workflow insights
 
 ---
 
@@ -73,9 +97,18 @@ Then: activity level, efficiency, standout patterns.
 
 ### Key Metrics (compact)
 
+**Activity** (combined across platforms)
 - Total prompts / responses
+- Breakdown by platform (Claude Code vs Cursor)
+- Active days
+
+**Tokens** (Claude Code only)
 - Input/output tokens and ratio
 - Per-day snapshot (3-5 days max)
+
+**Models** (Claude Code only)
+- Model distribution
+- Strategic usage patterns
 
 ### Recommendations (3-5 bullets)
 

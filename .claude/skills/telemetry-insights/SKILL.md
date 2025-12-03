@@ -22,38 +22,24 @@ description: Analyze AI coding session telemetry for usage patterns, token effic
 
 **Database**: `~/.blueplane/telemetry.db`
 
-**Tables**: `cursor_raw_traces`, `claude_raw_traces`
+### Schema Reference
 
-### Platform Data Availability
+**Claude Code** (`claude_raw_traces` table):
+- Workspace filter: `WHERE cwd LIKE '/path/to/workspace%'` (NOT workspace_hash)
+- Token fields: `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`
+- Model field: `message_model` (e.g., "claude-sonnet-4-5-20250929")
+- Role field: `message_role` ('user' | 'assistant')
+- Branch field: `git_branch`
 
-| Field | Cursor | Claude Code |
-|-------|--------|-------------|
-| Tokens | ✅ `tokenCount.inputTokens/outputTokens` | ✅ `message.usage` |
-| Model | ❌ Not stored by Cursor | ✅ `message.model` |
-| Prompt text | ✅ `text` field | ✅ Transcript entries |
-
-### Workspace Filtering for Bubbles
-
-Bubble events have empty `workspace_hash`. To filter by workspace:
-
-1. Get valid `composer_id`s from composer events with target `workspace_hash`
-2. Extract `composer_id` from bubble's `item_key`: `bubbleId:{composerId}:{bubbleId}`
-3. Filter bubbles to those with matching composer_id
-
-```sql
--- Get composer_ids for workspace
-SELECT DISTINCT composer_id FROM cursor_raw_traces
-WHERE event_type = 'composer' AND workspace_hash = ? AND workspace_hash != '';
-
--- Then filter bubbles by composer_id extracted from item_key
-```
-
-### Message Types
-
-- `type=1`: User prompt
-- `type=2`: AI response (has `tokenCount`)
-
----
+**Cursor** (`cursor_sessions` + `cursor_raw_traces` tables):
+- Session lookup: `SELECT id, workspace_hash FROM cursor_sessions WHERE workspace_path LIKE '/path/to/workspace%'`
+  - `cursor_sessions.id` IS the `composer_id` (same value)
+- Bubble filtering: Extract composer_id from `item_key`: `"bubbleId:{composerId}:{bubbleId}"`
+  - Bubbles have empty `workspace_hash` in global storage
+  - Must join via composer_id extracted from item_key
+- Token field: `token_count_up_until_here` (cumulative context, NOT per-message tokens)
+- Message type: `message_type` (0=user, 1=assistant, often NULL - use heuristics)
+- Model: ❌ Not stored in database
 
 ## Raw Metrics
 
