@@ -71,3 +71,7 @@ out/
 *.tsbuildinfo
 *.vsix
 
+
+# Cursor IDE
+.cursor/
+.cursorignore
