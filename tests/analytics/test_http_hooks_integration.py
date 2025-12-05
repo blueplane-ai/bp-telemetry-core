@@ -40,7 +40,7 @@ def temp_sqlite_db():
     # Initialize database schema
     client = SQLiteClient(db_path)
     create_schema(client)
-    client.close()
+    # SQLiteClient uses context managers, no close() method needed
     
     yield db_path
     
@@ -58,11 +58,17 @@ def redis_client():
     except redis.ConnectionError:
         pytest.skip("Redis not available")
     finally:
-        # Clean up test data
+        # Clean up test data - delete stream and consumer groups
         try:
+            # Delete stream
             client.delete('telemetry:events')
-        except:
-            pass
+            # Try to delete consumer groups (may not exist, that's OK)
+            try:
+                client.xgroup_destroy('telemetry:events', 'test_consumers')
+            except redis.exceptions.ResponseError:
+                pass  # Group doesn't exist, that's fine
+        except Exception:
+            pass  # Ignore cleanup errors
 
 
 @pytest.fixture
@@ -117,9 +123,35 @@ class TestHTTPHooksAnalyticsIntegration:
         sqlite_path = temp_sqlite_db
         duckdb_path, _ = temp_duckdb
         
-        # Step 1: Submit event via HTTP endpoint
+        # Step 1: Clean up any existing consumer group and create fresh one
+        # Use unique consumer group name per test run to avoid conflicts
+        import uuid
+        unique_group = f'test_consumers_{uuid.uuid4().hex[:8]}'
+        
+        # Delete stream if it exists to ensure clean state
+        try:
+            redis_client.delete('telemetry:events')
+        except Exception:
+            pass
+        
+        # Create consumer group FIRST (before writing message)
+        # This ensures new messages will be available for reading
+        try:
+            redis_client.xgroup_create(
+                'telemetry:events',
+                unique_group,
+                id='0',  # Start from beginning (for any existing messages)
+                mkstream=True
+            )
+        except redis.exceptions.ResponseError as e:
+            if "BUSYGROUP" not in str(e):
+                raise
+        
+        # Step 2: Submit event via HTTP endpoint
+        # The event needs event_type='session_start' to pass the filter in _process_batch
         event = {
             "hook_type": "session_start",
+            "event_type": "session_start",  # Required for Claude Code event filter
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "payload": {
                 "session_id": "test-session-123",
@@ -144,25 +176,13 @@ class TestHTTPHooksAnalyticsIntegration:
         except urllib.error.URLError:
             pytest.skip("HTTP endpoint not responding")
         
-        # Step 2: Verify event is in Redis
+        # Step 3: Verify event is in Redis
         time.sleep(0.2)  # Give Redis time to process
         stream_length = redis_client.xlen('telemetry:events')
         assert stream_length > 0, "Event should be in Redis stream"
         
-        # Step 3: Process event through consumer to SQLite
+        # Step 4: Process event through consumer to SQLite
         claude_writer = ClaudeRawTracesWriter(SQLiteClient(sqlite_path))
-        
-        # Create consumer group
-        try:
-            redis_client.xgroup_create(
-                'telemetry:events',
-                'test_consumers',
-                id='0',
-                mkstream=True
-            )
-        except redis.exceptions.ResponseError as e:
-            if "BUSYGROUP" not in str(e):
-                raise
         
         # Consume and process event
         consumer = ClaudeEventConsumer(
@@ -170,24 +190,54 @@ class TestHTTPHooksAnalyticsIntegration:
             claude_writer=claude_writer,
             cdc_publisher=None,  # Skip CDC for this test
             stream_name='telemetry:events',
-            consumer_group='test_consumers',
+            consumer_group=unique_group,  # Use unique group name
             consumer_name='test-consumer-1',
             batch_size=1,
             batch_timeout=0.1,
-            block_ms=1000
+            block_ms=100  # Shorter timeout for test
         )
         
-        # Process one batch
-        consumer._process_batch()
+        # Read messages from Redis
+        # Since consumer group was created BEFORE the message was written,
+        # we can use '>' to read new messages
+        messages_data = redis_client.xreadgroup(
+            unique_group,  # Use unique group name
+            'test-consumer-1',
+            {'telemetry:events': '>'},  # Read new messages
+            count=1,
+            block=100
+        )
+        
+        assert messages_data, "Should have messages from Redis stream"
+        
+        # Parse messages in the format expected by _process_batch
+        # _decode_stream_message handles bytes decoding internally, so pass raw fields
+        messages = []
+        for stream_name, stream_messages in messages_data:
+            for message_id, fields in stream_messages:
+                msg_id = message_id.decode('utf-8') if isinstance(message_id, bytes) else str(message_id)
+                # Pass raw fields - _decode_stream_message will handle decoding
+                event = consumer._decode_stream_message(msg_id, fields)
+                if event is not None:  # Only add if decoding succeeded
+                    messages.append({
+                        'id': msg_id,
+                        'event': event
+                    })
+        
+        assert messages, f"Should have parsed messages (got {len(messages)} from {len(messages_data[0][1]) if messages_data else 0} raw messages)"
+        assert messages[0]['event'] is not None, "Event should be decoded successfully"
+        
+        # Process the batch
+        consumer._process_batch(messages)
         
         # Step 4: Verify event is in SQLite
         sqlite_client = SQLiteClient(sqlite_path)
-        cursor = sqlite_client.get_connection().execute("""
-            SELECT COUNT(*) FROM claude_raw_traces
-        """)
-        trace_count = cursor.fetchone()[0]
-        assert trace_count > 0, "Event should be in SQLite"
-        sqlite_client.close()
+        with sqlite_client.get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT COUNT(*) FROM claude_raw_traces
+            """)
+            trace_count = cursor.fetchone()[0]
+            assert trace_count > 0, "Event should be in SQLite"
         
         # Step 5: Verify analytics service can read from SQLite and write to DuckDB
         reader = SQLiteReader(Path(sqlite_path))

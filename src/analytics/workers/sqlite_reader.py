@@ -97,6 +97,8 @@ class SQLiteReader:
             timestamp: Optional timestamp of last processed record
         """
         with self.client.get_connection() as conn:
+            # Convert datetime to ISO format string to avoid Python 3.12 deprecation warning
+            timestamp_str = timestamp.isoformat() if timestamp else None
             conn.execute("""
                 INSERT INTO analytics_processing_state (platform, last_processed_sequence, last_processed_timestamp)
                 VALUES (?, ?, ?)
@@ -104,7 +106,7 @@ class SQLiteReader:
                     last_processed_sequence = EXCLUDED.last_processed_sequence,
                     last_processed_timestamp = EXCLUDED.last_processed_timestamp,
                     updated_at = CURRENT_TIMESTAMP
-            """, (platform, sequence, timestamp))
+            """, (platform, sequence, timestamp_str))
             conn.commit()
         logger.debug(f"Updated processing state for {platform}: sequence={sequence}")
 
@@ -237,7 +239,8 @@ class SQLiteReader:
             
             if since_timestamp:
                 query += " WHERE started_at >= ?"
-                params.append(since_timestamp)
+                # Convert datetime to ISO format string to avoid Python 3.12 deprecation warning
+                params.append(since_timestamp.isoformat() if isinstance(since_timestamp, datetime) else since_timestamp)
             
             query += " ORDER BY started_at ASC LIMIT ?"
             params.append(limit)
@@ -297,7 +300,8 @@ class SQLiteReader:
             
             if since_timestamp:
                 query += " WHERE started_at >= ?"
-                params.append(since_timestamp)
+                # Convert datetime to ISO format string to avoid Python 3.12 deprecation warning
+                params.append(since_timestamp.isoformat() if isinstance(since_timestamp, datetime) else since_timestamp)
             
             query += " ORDER BY started_at ASC LIMIT ?"
             params.append(limit)

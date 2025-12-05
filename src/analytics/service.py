@@ -81,16 +81,17 @@ class AnalyticsService:
         else:
             duckdb_path = Path.home() / ".blueplane" / "analytics.duckdb"
         
+        # Initialize state variables (always, even if disabled)
+        self.running = False
+        self._task: Optional[asyncio.Task] = None
+        
         if not self.enabled:
             logger.info("Analytics service is disabled")
             return
         
-        # Initialize readers and writers
+        # Initialize readers and writers (only if enabled)
         self.sqlite_reader = SQLiteReader(sqlite_path)
         self.duckdb_writer = DuckDBWriter(duckdb_path)
-        
-        self.running = False
-        self._task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         """Start the analytics service."""

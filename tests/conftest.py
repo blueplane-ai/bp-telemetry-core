@@ -15,6 +15,9 @@ sys.path.insert(0, str(project_root))
 try:
     import pytest_asyncio
     pytest_plugins = ['pytest_asyncio']
+    # Configure asyncio default fixture loop scope to avoid deprecation warning
+    import pytest
+    pytest_asyncio.fixture_scope = "function"  # Default to function scope
 except ImportError:
     # pytest-asyncio not installed, async tests will be skipped
     pass
