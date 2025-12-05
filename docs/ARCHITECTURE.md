@@ -606,10 +606,21 @@ Stream: cdc:events (change data capture)
 blueplane install claude-code
 blueplane start
 
+# Enable analytics service (optional)
+# Edit ~/.blueplane/config.yaml:
+# analytics:
+#   enabled: true
+
 # Background service
 systemctl --user enable blueplane
 systemctl --user start blueplane
 ```
+
+**Analytics Service** (Optional):
+- Disabled by default (`analytics.enabled: false`)
+- Reads from SQLite and writes to DuckDB
+- Runs independently from trace capture
+- Processes on configurable schedule (default: 5 minutes)
 
 ### Team Setup (Privacy-Preserved)
 
@@ -640,6 +651,7 @@ blueplane team aggregate *.json --output team_dashboard.json
 
 - `sqlite3`: Embedded database for raw traces + conversations (Python stdlib)
 - `redis`: Message queue (Streams) + real-time metrics (TimeSeries)
+- `duckdb`: Analytics database (optional, for analytics service)
 - `pyarrow`: Parquet archival only
 - `asyncio`: Async event processing
 - `httpx`: HTTP client
