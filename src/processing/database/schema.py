@@ -9,7 +9,9 @@ Creates tables for raw traces, conversations, and related data structures.
 """
 
 import hashlib
+import json
 import logging
+import uuid
 from typing import Optional
 
 from .sqlite_client import SQLiteClient
@@ -17,7 +19,7 @@ from .sqlite_client import SQLiteClient
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 
 def create_cursor_sessions_table(client: SQLiteClient) -> None:
@@ -588,6 +590,84 @@ def get_schema_version(client: SQLiteClient) -> Optional[int]:
         return None
 
 
+def create_workspaces_table(client: SQLiteClient) -> None:
+    """
+    Create workspaces table as central registry for workspace identification.
+
+    This table links cursor_sessions, conversations, and git_commits together.
+
+    Args:
+        client: SQLiteClient instance
+    """
+    sql = """
+    CREATE TABLE IF NOT EXISTS workspaces (
+        workspace_hash TEXT PRIMARY KEY,
+        workspace_path TEXT NOT NULL,
+        workspace_name TEXT,
+        first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        metadata TEXT DEFAULT '{}'
+    );
+    """
+    client.execute(sql)
+
+    # Create indexes
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_workspaces_path ON workspaces(workspace_path);",
+        "CREATE INDEX IF NOT EXISTS idx_workspaces_last_seen ON workspaces(last_seen_at DESC);",
+    ]
+
+    for index_sql in indexes:
+        client.execute(index_sql)
+
+    logger.info("Created workspaces table")
+
+
+def create_git_commits_table(client: SQLiteClient) -> None:
+    """
+    Create git_commits table for storing git commit metadata.
+
+    Stores commit metadata with workspace and repo linking for analysis.
+
+    Args:
+        client: SQLiteClient instance
+    """
+    sql = """
+    CREATE TABLE IF NOT EXISTS git_commits (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        commit_hash TEXT NOT NULL,
+        repo_id TEXT NOT NULL,
+        workspace_hash TEXT NOT NULL,
+        author_name TEXT,
+        author_email TEXT,
+        commit_timestamp TIMESTAMP NOT NULL,
+        commit_message TEXT,
+        files_changed INTEGER DEFAULT 0,
+        insertions INTEGER DEFAULT 0,
+        deletions INTEGER DEFAULT 0,
+        branch_name TEXT,
+        ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        event_id TEXT,
+        UNIQUE(repo_id, commit_hash)
+    );
+    """
+    client.execute(sql)
+
+    # Create indexes
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_git_commits_workspace ON git_commits(workspace_hash, commit_timestamp DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_git_commits_repo ON git_commits(repo_id, commit_timestamp DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_git_commits_timestamp ON git_commits(commit_timestamp DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_git_commits_author ON git_commits(author_email, commit_timestamp DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_git_commits_branch ON git_commits(branch_name, commit_timestamp DESC);",
+    ]
+
+    for index_sql in indexes:
+        client.execute(index_sql)
+
+    logger.info("Created git_commits table")
+
+
 def migrate_schema(client: SQLiteClient, from_version: int, to_version: int) -> None:
     """
     Migrate database schema from one version to another.
@@ -613,12 +693,15 @@ def migrate_schema(client: SQLiteClient, from_version: int, to_version: int) -> 
         if from_version < 2:
             migrate_to_v2(client)
             from_version = 2
-        
-        # Future migrations can be added here
-        # if from_version < 3:
-        #     migrate_to_v3(client)
-        #     from_version = 3
-        
+
+        if from_version < 3:
+            migrate_to_v3(client)
+            from_version = 3
+
+        if from_version < 4:
+            migrate_to_v4(client)
+            from_version = 4
+
         client.execute("INSERT OR REPLACE INTO schema_version (version) VALUES (?)", (to_version,))
         logger.info(f"Schema migrated to version {to_version}")
 
@@ -1061,5 +1144,173 @@ def migrate_to_v2(client: SQLiteClient) -> None:
             
     except Exception as e:
         logger.error(f"Migration to v2 failed: {e}", exc_info=True)
+        raise
+
+
+def migrate_to_v3(client: SQLiteClient) -> None:
+    """
+    Migrate schema to version 3: Add workspaces and git_commits tables.
+
+    Migration steps:
+    1. Create workspaces table
+    2. Create git_commits table
+    3. Backfill workspaces from cursor_sessions and conversations
+
+    Args:
+        client: SQLiteClient instance
+    """
+    logger.info("Starting migration to schema version 3...")
+
+    try:
+        with client.get_connection() as conn:
+            # Step 1: Create workspaces table
+            logger.info("Step 1: Creating workspaces table...")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    workspace_hash TEXT PRIMARY KEY,
+                    workspace_path TEXT NOT NULL,
+                    workspace_name TEXT,
+                    first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    metadata TEXT DEFAULT '{}'
+                )
+            """)
+
+            # Create workspaces indexes
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_workspaces_path ON workspaces(workspace_path);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_workspaces_last_seen ON workspaces(last_seen_at DESC);")
+
+            # Step 2: Create git_commits table
+            logger.info("Step 2: Creating git_commits table...")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS git_commits (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    commit_hash TEXT NOT NULL,
+                    repo_id TEXT NOT NULL,
+                    workspace_hash TEXT NOT NULL,
+                    author_name TEXT,
+                    author_email TEXT,
+                    commit_timestamp TIMESTAMP NOT NULL,
+                    commit_message TEXT,
+                    files_changed INTEGER DEFAULT 0,
+                    insertions INTEGER DEFAULT 0,
+                    deletions INTEGER DEFAULT 0,
+                    branch_name TEXT,
+                    ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    event_id TEXT,
+                    UNIQUE(repo_id, commit_hash)
+                )
+            """)
+
+            # Create git_commits indexes
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_git_commits_workspace ON git_commits(workspace_hash, commit_timestamp DESC);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_git_commits_repo ON git_commits(repo_id, commit_timestamp DESC);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_git_commits_timestamp ON git_commits(commit_timestamp DESC);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_git_commits_author ON git_commits(author_email, commit_timestamp DESC);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_git_commits_branch ON git_commits(branch_name, commit_timestamp DESC);")
+
+            # Step 3: Backfill workspaces from cursor_sessions
+            logger.info("Step 3: Backfilling workspaces from cursor_sessions...")
+            conn.execute("""
+                INSERT OR IGNORE INTO workspaces (workspace_hash, workspace_path, workspace_name)
+                SELECT DISTINCT workspace_hash,
+                       COALESCE(workspace_path, ''),
+                       workspace_name
+                FROM cursor_sessions
+                WHERE workspace_hash IS NOT NULL
+            """)
+
+            # Step 4: Backfill workspaces from conversations
+            logger.info("Step 4: Backfilling workspaces from conversations...")
+            conn.execute("""
+                INSERT OR IGNORE INTO workspaces (workspace_hash, workspace_path, workspace_name)
+                SELECT DISTINCT workspace_hash,
+                       COALESCE(json_extract(context, '$.workspace_path'), ''),
+                       workspace_name
+                FROM conversations
+                WHERE workspace_hash IS NOT NULL
+            """)
+
+            conn.commit()
+            logger.info("Migration to v3 complete")
+
+    except Exception as e:
+        logger.error(f"Migration to v3 failed: {e}", exc_info=True)
+        raise
+
+
+def migrate_to_v4(client: SQLiteClient) -> None:
+    """
+    Migrate schema to version 4: Rename conversations table to claude_conversations.
+
+    This migration renames the conversations table to claude_conversations for clarity,
+    as the table is specific to Claude Code interactions.
+
+    Args:
+        client: SQLiteClient instance
+    """
+    logger.info("Starting migration to schema version 4...")
+
+    try:
+        with client.get_connection() as conn:
+            # Check if the conversations table exists and rename it
+            cursor = conn.execute("""
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name='conversations'
+            """)
+
+            if cursor.fetchone():
+                logger.info("Renaming conversations table to claude_conversations...")
+
+                # Disable foreign keys for the migration
+                conn.execute("PRAGMA foreign_keys = OFF")
+
+                # Rename the table
+                conn.execute("ALTER TABLE conversations RENAME TO claude_conversations")
+
+                # Rename all related indexes
+                # Get all indexes related to conversations
+                cursor = conn.execute("""
+                    SELECT name FROM sqlite_master
+                    WHERE type='index' AND tbl_name='claude_conversations'
+                """)
+
+                old_indexes = [row[0] for row in cursor.fetchall()]
+
+                for old_index_name in old_indexes:
+                    if old_index_name.startswith('sqlite_autoindex_'):
+                        # Skip autoindexes
+                        continue
+
+                    # Create new index name
+                    new_index_name = old_index_name.replace('conv_', 'claude_conv_').replace('conversations_', 'claude_conversations_')
+
+                    if new_index_name != old_index_name:
+                        try:
+                            conn.execute(f"ALTER INDEX {old_index_name} RENAME TO {new_index_name}")
+                            logger.info(f"Renamed index {old_index_name} to {new_index_name}")
+                        except Exception as e:
+                            logger.warning(f"Could not rename index {old_index_name}: {e}")
+
+                # Re-enable foreign keys
+                conn.execute("PRAGMA foreign_keys = ON")
+                conn.commit()
+                logger.info("Successfully renamed conversations table to claude_conversations")
+            else:
+                logger.info("conversations table does not exist, skipping rename")
+
+                # Check if claude_conversations already exists
+                cursor = conn.execute("""
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name='claude_conversations'
+                """)
+
+                if cursor.fetchone():
+                    logger.info("claude_conversations table already exists, migration complete")
+                else:
+                    logger.warning("Neither conversations nor claude_conversations table found")
+
+    except Exception as e:
+        logger.error(f"Migration to v4 failed: {e}", exc_info=True)
         raise
 

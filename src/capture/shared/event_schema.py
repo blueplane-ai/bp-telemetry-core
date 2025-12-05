@@ -19,6 +19,7 @@ class Platform(str, Enum):
     """Supported IDE platforms."""
     CLAUDE_CODE = "claude_code"
     CURSOR = "cursor"
+    GIT = "git"
 
 
 class EventType(str, Enum):
@@ -54,6 +55,9 @@ class EventType(str, Enum):
     # Context management
     CONTEXT_COMPACT = "context_compact"
 
+    # Git commits
+    GIT_COMMIT = "git_commit"
+
     # Errors
     ERROR = "error"
 
@@ -83,6 +87,9 @@ class HookType(str, Enum):
     # Extension-generated events (not actual hooks)
     SESSION = "session"
     DATABASE_TRACE = "DatabaseTrace"
+
+    # Git hooks
+    GIT_POST_COMMIT = "GitPostCommit"
 
 
 @dataclass
@@ -202,7 +209,8 @@ class EventSchema:
             raise ValueError(f"Invalid platform: {event['platform']}")
 
         # Validate event_type
-        if event["event_type"] not in [e.value for e in EventType]:
+        valid_event_types = [e.value for e in EventType]
+        if event["event_type"] not in valid_event_types:
             raise ValueError(f"Invalid event_type: {event['event_type']}")
 
         # Validate timestamp format
@@ -244,6 +252,9 @@ class EventSchema:
             HookType.AFTER_SHELL_EXECUTION: EventType.SHELL_EXECUTION,
             HookType.BEFORE_READ_FILE: EventType.FILE_READ,
             HookType.CURSOR_STOP: EventType.SESSION_END,
+
+            # Git
+            HookType.GIT_POST_COMMIT: EventType.GIT_COMMIT,
         }
 
         return mapping.get(hook_type, EventType.ERROR)

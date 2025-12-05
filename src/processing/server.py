@@ -36,6 +36,7 @@ from .claude_code.session_monitor import ClaudeCodeSessionMonitor
 from .claude_code.jsonl_monitor import ClaudeCodeJSONLMonitor
 from .claude_code.session_timeout import SessionTimeoutManager
 from .http_endpoint import HTTPEndpoint
+from .git.event_consumer import GitEventConsumer
 from ..capture.shared.config import Config
 from ..capture.shared.queue_writer import MessageQueueWriter
 
@@ -83,6 +84,7 @@ class TelemetryServer:
         self.claude_timeout_manager: Optional[SessionTimeoutManager] = None
         self.http_endpoint: Optional[HTTPEndpoint] = None
         self.queue_writer: Optional[MessageQueueWriter] = None
+        self.git_event_consumer: Optional[GitEventConsumer] = None
         self.running = False
         self.monitor_threads: list[threading.Thread] = []
 
@@ -265,6 +267,27 @@ class TelemetryServer:
         )
 
         logger.info(f"HTTP endpoint initialized (will listen on {host}:{port})")
+
+    def _initialize_git_monitor(self) -> None:
+        """Initialize Git commit event consumer."""
+        git_config = self.config.get_monitoring_config("git_commits")
+        enabled = git_config.get("enabled", True)
+
+        if not enabled:
+            logger.info("Git commit monitoring is disabled")
+            return
+
+        logger.info("Initializing Git commit event consumer")
+
+        stream_config = self.config.get_stream_config("message_queue")
+
+        self.git_event_consumer = GitEventConsumer(
+            redis_client=self.redis_client,
+            sqlite_client=self.sqlite_client,
+            stream_name=stream_config.name,
+        )
+
+        logger.info("Git commit event consumer initialized")
 
     def _initialize_cursor_monitor(self) -> None:
         """Initialize Cursor database monitor."""
@@ -477,6 +500,7 @@ class TelemetryServer:
             self._initialize_redis()
             self._initialize_consumer()
             self._initialize_http_endpoint()
+            self._initialize_git_monitor()
             self._initialize_cursor_monitor()
             self._initialize_markdown_monitor()
             self._initialize_unified_cursor_monitor()
@@ -671,6 +695,24 @@ class TelemetryServer:
                 claude_thread.start()
                 self.monitor_threads.append(claude_thread)
                 logger.info("Claude Code transcript monitor started")
+
+            # Start Git commit event consumer (if enabled)
+            if self.git_event_consumer:
+                def run_git_event_consumer():
+                    import asyncio
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(self.git_event_consumer.start())
+                    except Exception as e:
+                        logger.error(f"Git event consumer thread crashed: {e}", exc_info=True)
+
+                git_thread = threading.Thread(target=run_git_event_consumer, daemon=True)
+                git_thread.start()
+                self.monitor_threads.append(git_thread)
+                logger.info("Git event consumer started")
 
             # Start consumer (this blocks)
             self.running = True
