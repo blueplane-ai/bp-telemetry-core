@@ -1314,3 +1314,129 @@ def migrate_to_v4(client: SQLiteClient) -> None:
         logger.error(f"Migration to v4 failed: {e}", exc_info=True)
         raise
 
+
+def run_migrations_with_runner(
+    client: SQLiteClient,
+    target_version: Optional[int] = None,
+) -> bool:
+    """
+    Run migrations using the new MigrationRunner system.
+
+    Provides backward compatibility with old schema_version system by:
+    1. Initializing migration_history table
+    2. Backfilling from schema_version if present
+    3. Registering inline Python migrations (v2-v4)
+    4. Discovering and applying SQL migrations
+    5. Applying all pending migrations
+
+    Args:
+        client: SQLiteClient instance
+        target_version: Target schema version (default: SCHEMA_VERSION)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    from .migration_runner import MigrationRunner
+
+    if target_version is None:
+        target_version = SCHEMA_VERSION
+
+    try:
+        # Initialize migration runner
+        runner = MigrationRunner(client)
+        runner.initialize_migration_history()
+
+        current_version = runner.get_current_version()
+
+        # Check for old schema_version table and backfill if needed
+        if current_version == 0:
+            old_version = get_schema_version(client)
+            if old_version and old_version > 0:
+                logger.info(f"Detected old schema_version system (v{old_version}), backfilling migration_history...")
+
+                # Backfill migration_history for v1 through old_version
+                for v in range(1, old_version + 1):
+                    description_map = {
+                        1: "initial_schema",
+                        2: "cursor_sessions",
+                        3: "workspaces_and_git",
+                        4: "rename_conversations",
+                    }
+
+                    runner._record_migration_status(
+                        version=v,
+                        description=description_map.get(v, f"legacy_v{v}"),
+                        checksum="legacy_backfill",
+                        execution_time_ms=0,
+                        status='completed',
+                        applied_by='legacy_backfill',
+                        metadata={'backfilled': True, 'original_system': 'schema_version'},
+                    )
+
+                logger.info(f"Backfilled migration_history with v1-v{old_version}")
+                current_version = old_version
+
+        # Discover SQL migrations
+        sql_migrations = runner.discover_migrations()
+
+        # Register inline Python migrations for backward compatibility
+        inline_migrations = [
+            runner.register_inline_migration(
+                version=2,
+                description="cursor_sessions",
+                up_func=migrate_to_v2,
+                down_func=None,
+                metadata={'type': 'inline', 'complex_data_migration': True},
+            ),
+            runner.register_inline_migration(
+                version=3,
+                description="workspaces_and_git",
+                up_func=migrate_to_v3,
+                down_func=None,
+                metadata={'type': 'inline'},
+            ),
+            runner.register_inline_migration(
+                version=4,
+                description="rename_conversations",
+                up_func=migrate_to_v4,
+                down_func=None,
+                metadata={'type': 'inline'},
+            ),
+        ]
+
+        # Merge SQL and inline migrations
+        # SQL migrations take precedence over inline if both exist
+        all_migrations_map = {m.version: m for m in inline_migrations}
+        for sql_migration in sql_migrations:
+            all_migrations_map[sql_migration.version] = sql_migration
+
+        all_migrations = sorted(all_migrations_map.values(), key=lambda m: m.version)
+
+        # Filter to only pending migrations up to target_version
+        applied_versions = {m.version for m in runner.get_applied_migrations() if m.status == 'completed'}
+        pending = [m for m in all_migrations if m.version not in applied_versions and m.version <= target_version]
+
+        if not pending:
+            logger.info(f"Database is up to date (v{current_version})")
+            return True
+
+        logger.info(f"Applying {len(pending)} pending migration(s) to v{target_version}")
+
+        # Apply migrations using runner
+        success = runner.migrate_to(target_version, dry_run=False)
+
+        if success:
+            logger.info(f"Successfully migrated to v{target_version}")
+        else:
+            logger.error("Migration failed")
+
+        return success
+
+    except Exception as e:
+        logger.error(f"Migration runner failed: {e}", exc_info=True)
+        # Fall back to old migration system
+        logger.warning("Falling back to old migration system")
+        from_version = get_schema_version(client) or 0
+        migrate_schema(client, from_version, target_version)
+        return True
+

@@ -139,41 +139,39 @@ class TelemetryServer:
     def _initialize_database(self) -> None:
         """Initialize SQLite database and schema."""
         logger.info(f"Initializing database: {self.db_path}")
-        
+
         self.sqlite_client = SQLiteClient(self.db_path)
-        
+
         # Initialize database with optimal settings
         self.sqlite_client.initialize_database()
-        
+
         # Check schema version and migrate if needed
         from src.processing.database.schema import (
-            create_schema, get_schema_version, migrate_schema, 
-            SCHEMA_VERSION, detect_schema_version
+            create_schema, run_migrations_with_runner, detect_schema_version,
+            SCHEMA_VERSION
         )
-        
+
         current_version = detect_schema_version(self.sqlite_client)
-        
+
         if current_version is None:
             # First time setup - create schema
             logger.info("Creating database schema...")
             create_schema(self.sqlite_client)
-            
-            # Set schema version
-            self.sqlite_client.execute(
-                "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)"
-            )
-            self.sqlite_client.execute(
-                "INSERT INTO schema_version (version) VALUES (?)",
-                (SCHEMA_VERSION,)
-            )
+
+            # Run migrations using new migration runner
+            logger.info("Initializing migration system...")
+            run_migrations_with_runner(self.sqlite_client, target_version=SCHEMA_VERSION)
             logger.info(f"Database schema created (version {SCHEMA_VERSION})")
         elif current_version < SCHEMA_VERSION:
-            # Migration needed
+            # Migration needed - use new migration runner
             logger.info(f"Migrating schema from version {current_version} to {SCHEMA_VERSION}")
-            migrate_schema(self.sqlite_client, current_version, SCHEMA_VERSION)
+            success = run_migrations_with_runner(self.sqlite_client, target_version=SCHEMA_VERSION)
+            if not success:
+                raise RuntimeError("Database migration failed")
         else:
-            # Ensure schema exists (for new tables)
+            # Ensure schema exists (for new tables) and migration system is initialized
             create_schema(self.sqlite_client)
+            run_migrations_with_runner(self.sqlite_client, target_version=SCHEMA_VERSION)
             logger.info(f"Database schema is up to date (version {current_version})")
 
         # Create Claude writer
