@@ -1,0 +1,21 @@
+version: 3
+description: "Add workspaces and git_commits tables"
+author: "blueplane"
+created: "2025-12-07T17:58:54.479583+00:00"
+dependencies:
+  - V002__cursor_sessions
+tags:
+  - workspaces
+  - git
+  - commits
+estimated_duration_ms: 200
+reversible: true
+notes: |
+  This migration creates the workspaces table as a central registry for
+  workspace identification, linking cursor_sessions, conversations, and
+  git_commits together.
+
+  The git_commits table stores commit metadata with workspace and repo
+  linking for analysis.
+
+  Backfills workspaces from existing cursor_sessions and conversations data.

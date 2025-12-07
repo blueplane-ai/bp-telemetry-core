@@ -32,6 +32,10 @@ from src.processing.database.migration_runner import (
     MigrationValidationError,
     MigrationLockError,
 )
+from src.processing.database.schema import (
+    get_schema_version,
+    SCHEMA_VERSION,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -53,7 +57,7 @@ def get_migrations_dir() -> Path:
 
 def init_runner(db_path: Optional[Path] = None) -> MigrationRunner:
     """
-    Initialize MigrationRunner.
+    Initialize MigrationRunner with backward compatibility for old schema_version system.
 
     Args:
         db_path: Optional database path (default: ~/.blueplane/telemetry.db)
@@ -72,6 +76,34 @@ def init_runner(db_path: Optional[Path] = None) -> MigrationRunner:
 
     # Initialize migration_history table
     runner.initialize_migration_history()
+
+    # Check for old schema_version table and backfill if needed
+    current_version = runner.get_current_version()
+    if current_version == 0:
+        old_version = get_schema_version(client)
+        if old_version and old_version > 0:
+            logger.info(f"Detected old schema_version system (v{old_version}), backfilling migration_history...")
+
+            # Backfill migration_history for v1 through old_version
+            description_map = {
+                1: "initial_schema",
+                2: "cursor_sessions",
+                3: "workspaces_and_git",
+                4: "rename_conversations",
+            }
+
+            for v in range(1, old_version + 1):
+                runner._record_migration_status(
+                    version=v,
+                    description=description_map.get(v, f"legacy_v{v}"),
+                    checksum="legacy_backfill",
+                    execution_time_ms=0,
+                    status='completed',
+                    applied_by='migrate.py_backfill',
+                    metadata={'backfilled': True, 'original_system': 'schema_version'},
+                )
+
+            logger.info(f"Backfilled migration_history with v1-v{old_version}")
 
     return runner
 

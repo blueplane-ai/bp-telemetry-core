@@ -1,0 +1,23 @@
+version: 4
+description: "Rename conversations table to claude_conversations"
+author: "blueplane"
+created: "2025-12-07T17:58:54.479789+00:00"
+dependencies:
+  - V003__workspaces_and_git
+tags:
+  - conversations
+  - claude
+  - rename
+estimated_duration_ms: 100
+reversible: true
+notes: |
+  This migration renames the conversations table to claude_conversations
+  for clarity, as the table is specific to Claude Code interactions.
+
+  The Python implementation includes additional logic to:
+  - Check if the table exists before renaming
+  - Handle index renaming with pattern matching
+  - Gracefully handle the case where the table was already renamed
+
+  For production use, the inline Python migration provides more robust
+  handling of edge cases.

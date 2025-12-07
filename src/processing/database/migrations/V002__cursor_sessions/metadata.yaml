@@ -1,0 +1,25 @@
+version: 2
+description: "Add cursor_sessions table and update conversations table"
+author: "blueplane"
+created: "2025-12-07T17:58:54.478825+00:00"
+dependencies:
+  - V001__initial_schema
+tags:
+  - cursor
+  - sessions
+estimated_duration_ms: 500
+reversible: false
+notes: |
+  This migration adds cursor_sessions table for Cursor IDE window sessions.
+
+  IMPORTANT: This migration includes complex data migration logic that
+  remains in the inline Python function migrate_to_v2().
+
+  The SQL files contain only the DDL portions. The actual conversations
+  table migration is handled by Python code in schema.py due to:
+  - Complex data transformations
+  - Multi-step table recreation
+  - Index recreation
+
+  For production use, the inline Python migration should be retained
+  alongside these SQL files for backward compatibility.
