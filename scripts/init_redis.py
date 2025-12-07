@@ -169,19 +169,30 @@ def verify_setup(host: str, port: int) -> bool:
 
 def main():
     """Main entry point."""
+    # Load config to get default Redis connection settings
+    default_host = 'localhost'
+    default_port = 6379
+    try:
+        config = Config()
+        redis_config = config.redis
+        default_host = redis_config.host
+        default_port = redis_config.port
+    except Exception as e:
+        print(f"Warning: Could not load config, using defaults: {e}", file=sys.stderr)
+
     parser = argparse.ArgumentParser(
         description='Initialize Redis Streams for Blueplane Telemetry'
     )
     parser.add_argument(
         '--host',
-        default='localhost',
-        help='Redis host (default: localhost)'
+        default=default_host,
+        help=f'Redis host (default: {default_host} from config)'
     )
     parser.add_argument(
         '--port',
         type=int,
-        default=6379,
-        help='Redis port (default: 6379)'
+        default=default_port,
+        help=f'Redis port (default: {default_port} from config)'
     )
     parser.add_argument(
         '--verify-only',
