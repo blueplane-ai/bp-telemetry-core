@@ -175,6 +175,11 @@ logging:
   log_session_lifecycle: true
   log_markdown_writes: true
 
+  # Log file trimming
+  max_log_lines: 10000 # Maximum number of lines to keep in server.log (default: 10000)
+                       # When exceeded, file is trimmed to keep only the most recent lines
+                       # Set to 0 to disable trimming (not recommended for long-running servers)
+
 # =============================================================================
 # HTTP ENDPOINT (for zero-dependency hook event submission)
 # =============================================================================

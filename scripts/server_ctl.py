@@ -70,6 +70,7 @@ class ServerController:
         self.log_file = self.blueplane_home / "server.log"
         self.script_dir = Path(__file__).parent
         self.start_script = self.script_dir / "start_server.py"
+        self._max_log_lines: Optional[int] = None
 
     def get_pid_info(self) -> Optional[Dict[str, Any]]:
         """
@@ -390,6 +391,72 @@ class ServerController:
 
         return result
 
+    def get_max_log_lines(self) -> int:
+        """
+        Get max log lines configuration from config.yaml.
+
+        Returns:
+            Maximum number of lines to keep in log file (default: 10000)
+        """
+        if self._max_log_lines is not None:
+            return self._max_log_lines
+
+        # Load from config if available
+        if HAS_CONFIG:
+            try:
+                config = Config()
+                max_lines = config.get("logging.max_log_lines", 10000)
+                self._max_log_lines = max_lines if max_lines > 0 else 0
+                return self._max_log_lines
+            except Exception:
+                pass
+
+        # Default to 10000 lines
+        self._max_log_lines = 10000
+        return self._max_log_lines
+
+    def trim_log_file(self, log_file: Optional[Path] = None) -> None:
+        """
+        Trim log file to max_log_lines, keeping only the most recent lines.
+
+        Args:
+            log_file: Path to log file (default: self.log_file)
+        """
+        log_file = log_file or self.log_file
+
+        if not log_file.exists():
+            return
+
+        max_lines = self.get_max_log_lines()
+
+        # If trimming disabled (0) or file doesn't exist, skip
+        if max_lines <= 0:
+            return
+
+        try:
+            # Read all lines from the file
+            with open(log_file, 'r') as f:
+                lines = f.readlines()
+
+            line_count = len(lines)
+
+            # Only trim if we exceed the limit
+            if line_count > max_lines:
+                # Keep only the last max_log_lines
+                lines_to_keep = lines[-max_lines:]
+
+                # Write back to file with a header indicating trimming occurred
+                with open(log_file, 'w') as f:
+                    f.write(f"{'='*80}\n")
+                    f.write(f"Log trimmed at {datetime.now(timezone.utc).isoformat()}\n")
+                    f.write(f"Removed {line_count - max_lines} older lines (kept {max_lines} most recent)\n")
+                    f.write(f"{'='*80}\n\n")
+                    f.writelines(lines_to_keep)
+
+        except Exception as e:
+            # Don't fail the operation if trimming fails
+            print(f"Warning: Failed to trim log file: {e}", file=sys.stderr)
+
     def check_monitor_status(self) -> Dict[str, Any]:
         """
         Check which monitors are configured and their settings.
@@ -472,6 +539,9 @@ class ServerController:
 
         # Ensure blueplane home exists
         self.blueplane_home.mkdir(parents=True, exist_ok=True)
+
+        # Trim log file before starting to prevent unbounded growth
+        self.trim_log_file()
 
         print("Starting Blueplane Telemetry server...")
 
