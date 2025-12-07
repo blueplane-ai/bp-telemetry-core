@@ -820,10 +820,9 @@ class ServerController:
             lines: Number of lines to display
             all_files: Include rotated backup files
         """
-        from collections import deque
-
-        # Collect lines from all relevant files
-        all_log_lines = deque(maxlen=lines)
+        # Collect all lines first, then take last N (ensures correct behavior
+        # when reading from multiple rotated files)
+        all_log_lines = []
 
         if all_files:
             # Read from oldest to newest: server.log.5 -> server.log.1 -> server.log
@@ -859,8 +858,11 @@ class ServerController:
             print(f"Error reading {self.log_file}: {e}", file=sys.stderr)
             return
 
+        # Take last N lines (handles case where total lines < requested lines)
+        last_lines = all_log_lines[-lines:] if len(all_log_lines) > lines else all_log_lines
+
         # Print collected lines
-        for line in all_log_lines:
+        for line in last_lines:
             print(line, end='')
 
     def _stream_logs(self, lines: int, all_files: bool = False) -> None:
