@@ -777,6 +777,218 @@ class ServerController:
 
         return exit_code
 
+    def logs(self, lines: int = 50, follow: bool = False, all_files: bool = False) -> int:
+        """
+        Display server logs with optional follow mode.
+
+        Args:
+            lines: Number of lines to display (default: 50)
+            follow: Follow log file in real-time
+            all_files: Include rotated backup files
+
+        Returns:
+            Exit code (0 = success, 1 = error)
+        """
+        # Check if log file exists
+        if not self.log_file.exists():
+            print(f"Log file not found: {self.log_file}", file=sys.stderr)
+            print("Server may not have been started yet.", file=sys.stderr)
+            return 1
+
+        try:
+            if follow:
+                # Follow mode - stream logs in real-time
+                self._stream_logs(lines, all_files)
+                return 0
+            else:
+                # Basic mode - display last N lines
+                self._print_last_lines(lines, all_files)
+                return 0
+
+        except KeyboardInterrupt:
+            print("\nStopped", file=sys.stderr)
+            return 0
+        except Exception as e:
+            print(f"Error reading logs: {e}", file=sys.stderr)
+            return 1
+
+    def _print_last_lines(self, lines: int, all_files: bool = False) -> None:
+        """
+        Print last N lines from log file(s).
+
+        Args:
+            lines: Number of lines to display
+            all_files: Include rotated backup files
+        """
+        from collections import deque
+
+        # Collect lines from all relevant files
+        all_log_lines = deque(maxlen=lines)
+
+        if all_files:
+            # Read from oldest to newest: server.log.5 -> server.log.1 -> server.log
+            log_dir = self.log_file.parent
+            base_name = self.log_file.name
+
+            # Determine backup_count from config (default: 5)
+            backup_count = 5
+            if HAS_CONFIG:
+                try:
+                    config = Config()
+                    backup_count = config.get("logging.rotation.backup_count", 5)
+                except Exception:
+                    pass
+
+            # Read rotated files in reverse order (oldest first)
+            for i in range(backup_count, 0, -1):
+                rotated_path = log_dir / f"{base_name}.{i}"
+                if rotated_path.exists():
+                    try:
+                        with open(rotated_path, 'r', encoding='utf-8', errors='replace') as f:
+                            for line in f:
+                                all_log_lines.append(line)
+                    except OSError as e:
+                        print(f"Warning: Could not read {rotated_path}: {e}", file=sys.stderr)
+
+        # Read current log file
+        try:
+            with open(self.log_file, 'r', encoding='utf-8', errors='replace') as f:
+                for line in f:
+                    all_log_lines.append(line)
+        except OSError as e:
+            print(f"Error reading {self.log_file}: {e}", file=sys.stderr)
+            return
+
+        # Print collected lines
+        for line in all_log_lines:
+            print(line, end='')
+
+    def _stream_logs(self, lines: int, all_files: bool = False) -> None:
+        """
+        Stream logs with rotation detection.
+
+        Args:
+            lines: Number of initial lines to display
+            all_files: Include rotated backup files in initial display
+        """
+        import time
+        import signal
+
+        # Setup graceful exit on Ctrl+C
+        def signal_handler(sig, frame):
+            print("\nStopping log stream...", file=sys.stderr)
+            raise KeyboardInterrupt()
+
+        signal.signal(signal.SIGINT, signal_handler)
+
+        # Show last N lines first (matches tail -f behavior)
+        self._print_last_lines(lines, all_files)
+
+        # Initialize file state for rotation tracking
+        class LogFileState:
+            """Track log file state to detect rotation."""
+
+            def __init__(self, log_file: Path):
+                self.log_file = log_file
+                self.file_handle: Optional[object] = None
+                self.last_inode = 0
+                self.last_position = 0
+
+            def open_file(self):
+                """Open log file for reading."""
+                if self.file_handle:
+                    self.file_handle.close()
+
+                self.file_handle = open(self.log_file, 'r', encoding='utf-8', errors='replace')
+                stat = self.log_file.stat()
+                self.last_inode = stat.st_ino
+                # Seek to end for follow mode
+                self.file_handle.seek(0, 2)  # SEEK_END
+                self.last_position = self.file_handle.tell()
+
+            def check_rotation(self) -> bool:
+                """Check if log file has rotated."""
+                if not self.log_file.exists():
+                    return False
+
+                try:
+                    current_inode = self.log_file.stat().st_ino
+                except OSError:
+                    return False
+
+                # Inode changed = file was rotated
+                if current_inode != self.last_inode:
+                    return True
+
+                return False
+
+            def read_remaining_lines(self) -> list:
+                """Read any remaining lines from current file handle."""
+                if not self.file_handle:
+                    return []
+
+                try:
+                    # Read everything left in the file
+                    lines = self.file_handle.readlines()
+                    return lines
+                except Exception:
+                    return []
+
+            def read_new_lines(self) -> list:
+                """Read new lines from current position."""
+                if not self.file_handle:
+                    return []
+
+                try:
+                    # Read all available lines
+                    lines = self.file_handle.readlines()
+                    self.last_position = self.file_handle.tell()
+                    return lines
+                except Exception:
+                    return []
+
+            def close(self):
+                """Close file handle."""
+                if self.file_handle:
+                    self.file_handle.close()
+                    self.file_handle = None
+
+        # Initialize state
+        state = LogFileState(self.log_file)
+        state.open_file()
+
+        # Streaming loop
+        poll_interval = 1.0  # Check every second
+
+        try:
+            while True:
+                # Check for rotation
+                if state.check_rotation():
+                    # Read any remaining lines from old file handle
+                    # before switching to new file (ensures no lines lost)
+                    remaining_lines = state.read_remaining_lines()
+                    for line in remaining_lines:
+                        print(line, end='')  # Raw output, no metadata
+
+                    # Now switch to new rotated file
+                    state.close()
+                    state.open_file()
+
+                # Read new lines from current file
+                new_lines = state.read_new_lines()
+                for line in new_lines:
+                    print(line, end='')  # Raw output, lines already have \n
+
+                # Flush stdout to ensure immediate output
+                sys.stdout.flush()
+
+                # Sleep until next check
+                time.sleep(poll_interval)
+
+        finally:
+            # Clean up
+            state.close()
+
 
 def main():
     """Main entry point for server control CLI."""
@@ -791,6 +1003,8 @@ Examples:
   %(prog)s stop --force       # Force kill if graceful fails
   %(prog)s restart --daemon   # Restart in background
   %(prog)s status --verbose   # Show detailed status
+  %(prog)s logs -n 100        # Show last 100 log lines
+  %(prog)s logs -f            # Follow logs in real-time
         """
     )
 
@@ -855,6 +1069,25 @@ Examples:
         help="Show detailed status information"
     )
 
+    # Logs command
+    logs_parser = subparsers.add_parser("logs", help="View server logs")
+    logs_parser.add_argument(
+        "--lines", "-n",
+        type=int,
+        default=50,
+        help="Number of lines to display (default: 50)"
+    )
+    logs_parser.add_argument(
+        "--follow", "-f",
+        action="store_true",
+        help="Follow log file in real-time (like tail -f)"
+    )
+    logs_parser.add_argument(
+        "--all-files",
+        action="store_true",
+        help="Show logs from all rotated backup files too"
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -873,6 +1106,12 @@ Examples:
         return controller.restart(daemon=args.daemon, timeout=args.timeout, verbose=args.verbose)
     elif args.command == "status":
         return controller.status(verbose=args.verbose)
+    elif args.command == "logs":
+        return controller.logs(
+            lines=args.lines,
+            follow=args.follow,
+            all_files=args.all_files
+        )
     else:
         parser.print_help()
         return 1
