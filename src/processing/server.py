@@ -25,7 +25,6 @@ from .common.cdc_publisher import CDCPublisher
 from .claude_code.raw_traces_writer import ClaudeRawTracesWriter
 from .cursor.session_monitor import SessionMonitor
 from .cursor.database_monitor import CursorDatabaseMonitor
-from .cursor.markdown_monitor import CursorMarkdownMonitor
 from .cursor.unified_cursor_monitor import UnifiedCursorMonitor, CursorMonitorConfig
 from .cursor.event_consumer import CursorEventProcessor
 from .cursor.raw_traces_writer import CursorRawTracesWriter
@@ -38,6 +37,7 @@ from .claude_code.session_timeout import SessionTimeoutManager
 from .http_endpoint import HTTPEndpoint
 from ..capture.shared.config import Config
 from ..capture.shared.queue_writer import MessageQueueWriter
+from ..analytics.processor import AnalyticsProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -66,14 +66,12 @@ class TelemetryServer:
         self.pid_file = Path.home() / ".blueplane" / "server.pid"
 
         self.sqlite_client: Optional[SQLiteClient] = None
-        self.sqlite_writer: Optional[SQLiteBatchWriter] = None
         self.redis_client: Optional[redis.Redis] = None
         self.cdc_publisher: Optional[CDCPublisher] = None
         self.consumer: Optional[ClaudeEventConsumer] = None
         self.session_monitor: Optional[SessionMonitor] = None
         self.cursor_timeout_manager: Optional[CursorSessionTimeoutManager] = None
         self.cursor_monitor: Optional[CursorDatabaseMonitor] = None
-        self.markdown_monitor: Optional[CursorMarkdownMonitor] = None
         self.unified_cursor_monitor: Optional[UnifiedCursorMonitor] = None
         self.cursor_event_processor: Optional[CursorEventProcessor] = None
         self.cursor_raw_traces_writer: Optional[CursorRawTracesWriter] = None
@@ -83,6 +81,7 @@ class TelemetryServer:
         self.claude_timeout_manager: Optional[SessionTimeoutManager] = None
         self.http_endpoint: Optional[HTTPEndpoint] = None
         self.queue_writer: Optional[MessageQueueWriter] = None
+        self.analytics_processor: Optional[AnalyticsProcessor] = None
         self.running = False
         self.monitor_threads: list[threading.Thread] = []
 
@@ -304,55 +303,6 @@ class TelemetryServer:
 
         logger.info("Cursor database monitor initialized")
 
-    def _initialize_markdown_monitor(self) -> None:
-        """Initialize Cursor Markdown History monitor."""
-        # Load monitoring and feature config
-        markdown_config = self.config.get_monitoring_config("cursor_markdown")
-        duckdb_config = self.config.get("features.duckdb_sink", {})
-
-        enabled = markdown_config.get("enabled", True)
-
-        if not enabled:
-            logger.info("Cursor Markdown History monitoring is disabled")
-            return
-
-        # Require session monitor to be initialized
-        if not self.session_monitor:
-            logger.warning("Session monitor not initialized, cannot start Markdown monitor")
-            return
-
-        logger.info("Initializing Cursor Markdown History monitor")
-
-        # Get output directory from config
-        output_dir = markdown_config.get("output_dir")
-        if output_dir:
-            output_dir = Path(output_dir)
-        
-        # Get DuckDB settings
-        enable_duckdb = duckdb_config.get("enabled", False)
-        duckdb_path = duckdb_config.get("database_path")
-        if duckdb_path:
-            duckdb_path = Path(duckdb_path)
-        
-        # Create markdown monitor
-        self.markdown_monitor = CursorMarkdownMonitor(
-            session_monitor=self.session_monitor,
-            output_dir=output_dir,
-            poll_interval=markdown_config.get("poll_interval_seconds", 120.0),
-            debounce_delay=markdown_config.get("debounce_delay_seconds", 10.0),
-            query_timeout=markdown_config.get("query_timeout_seconds", 1.5),
-            enable_duckdb=enable_duckdb,
-            duckdb_path=duckdb_path,
-        )
-
-        logger.info(
-            f"Cursor Markdown History monitor initialized "
-            f"(output_dir={output_dir or 'workspace/.history/'}, "
-            f"poll_interval={markdown_config.get('poll_interval_seconds', 120)}s, "
-            f"debounce={markdown_config.get('debounce_delay_seconds', 10)}s, "
-            f"duckdb_enabled={enable_duckdb})"
-        )
-
     def _initialize_unified_cursor_monitor(self) -> None:
         """Initialize UnifiedCursorMonitor (replaces database + markdown monitors)."""
         logger.info("Initializing Unified Cursor monitor")
@@ -446,6 +396,27 @@ class TelemetryServer:
 
         logger.info("Claude Code monitors initialized")
 
+    def _initialize_analytics_processor(self) -> None:
+        """
+        Initialize analytics processor.
+        
+        See also:
+        - Analytics processor: src/analytics/processor.py
+        - Configuration: config/config.yaml (analytics section)
+        - Architecture: docs/ANALYTICS_SERVICE_REFACTOR_PLAN.md
+        """
+        analytics_config = self.config.get("analytics", {})
+        enabled = analytics_config.get("enabled", False)
+
+        if not enabled:
+            logger.info("Analytics processor is disabled")
+            return
+
+        logger.info("Initializing analytics processor")
+        
+        self.analytics_processor = AnalyticsProcessor(config=self.config)
+        
+        logger.info("Analytics processor initialized")
     async def _log_metrics_periodically(self):
         """Log metrics periodically."""
         import asyncio
@@ -477,9 +448,9 @@ class TelemetryServer:
             self._initialize_consumer()
             self._initialize_http_endpoint()
             self._initialize_cursor_monitor()
-            self._initialize_markdown_monitor()
             self._initialize_unified_cursor_monitor()
             self._initialize_claude_code_monitor()
+            self._initialize_analytics_processor()
 
             # Start HTTP endpoint (if enabled)
             if self.http_endpoint:
@@ -540,19 +511,6 @@ class TelemetryServer:
                 metrics_thread.start()
                 self.monitor_threads.append(metrics_thread)
                 logger.info("Session metrics logger started")
-
-            # Start markdown monitor (if enabled)
-            if self.markdown_monitor:
-                def run_markdown_monitor():
-                    import asyncio
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self.markdown_monitor.start())
-
-                markdown_thread = threading.Thread(target=run_markdown_monitor, daemon=True)
-                markdown_thread.start()
-                self.monitor_threads.append(markdown_thread)
-                logger.info("Cursor Markdown History monitor started")
 
             # Start unified cursor monitor
             if self.unified_cursor_monitor:
@@ -671,6 +629,27 @@ class TelemetryServer:
                 self.monitor_threads.append(claude_thread)
                 logger.info("Claude Code transcript monitor started")
 
+            # Start analytics processor (if enabled)
+            if self.analytics_processor:
+                def run_analytics_processor():
+                    import asyncio
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(self.analytics_processor.start())
+                        # Keep running
+                        while True:
+                            loop.run_until_complete(asyncio.sleep(1))
+                    except Exception as e:
+                        logger.error(f"Analytics processor thread crashed: {e}", exc_info=True)
+
+                analytics_thread = threading.Thread(target=run_analytics_processor, daemon=True)
+                analytics_thread.start()
+                self.monitor_threads.append(analytics_thread)
+                logger.info("Analytics processor started")
+
             # Start consumer (this blocks)
             self.running = True
             self.consumer.run()
@@ -732,11 +711,11 @@ class TelemetryServer:
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self.claude_code_monitor.stop())
 
-        if self.markdown_monitor:
+        if self.analytics_processor:
             import asyncio
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.markdown_monitor.stop())
+            loop.run_until_complete(self.analytics_processor.stop())
 
         # Stop Cursor monitors
         if self.cursor_monitor:
