@@ -21,6 +21,7 @@ paths:
   # Database paths
   database:
     telemetry_db: "~/.blueplane/telemetry.db"
+    analytics_db: "~/.blueplane/analytics.duckdb"  # DuckDB analytics database
     cursor_history_db: "~/.blueplane/cursor_history.duckdb"
     event_buffer_db: "~/.blueplane/event_buffer.db"
     workspace_cache: "~/.blueplane/workspace_db_cache.json"
@@ -183,18 +184,12 @@ http_endpoint:
   port: 8787
 
 # =============================================================================
-<<<<<<< HEAD
-# FEATURES
-# =============================================================================
-features:
-# =============================================================================
 # ANALYTICS PROCESSOR
 # =============================================================================
 analytics:
   enabled: false  # Enable analytics processor (reads from SQLite, writes to DuckDB)
   processing_interval: 300  # seconds (5 minutes default)
   batch_size: 1000  # traces per batch
-  sqlite:
-    db_path: "~/.blueplane/telemetry.db"  # Uses paths.database.telemetry_db if not specified
-  duckdb:
-    db_path: "~/.blueplane/analytics.duckdb"  # DuckDB analytics database path
+  # Database paths are configured in paths.database section:
+  # - SQLite: paths.database.telemetry_db
+  # - DuckDB: paths.database.analytics_db

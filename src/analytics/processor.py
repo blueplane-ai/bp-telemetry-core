@@ -60,26 +60,14 @@ class AnalyticsProcessor:
             self.enabled = analytics_config.get("enabled", False)
             self.processing_interval = analytics_config.get("processing_interval", 300)  # 5 minutes default
             self.batch_size = analytics_config.get("batch_size", 1000)
-            
-            # Get DuckDB path from config
-            duckdb_config = analytics_config.get("duckdb", {})
-            if isinstance(duckdb_config, dict):
-                duckdb_path = duckdb_config.get("db_path")
-            else:
-                duckdb_path = None
         else:
             self.enabled = False
             self.processing_interval = 300
             self.batch_size = 1000
-            duckdb_path = None
         
-        # Get database paths
+        # Get database paths from unified paths.database section
         sqlite_path = self.config.get_path("paths.database.telemetry_db")
-        
-        if duckdb_path:
-            duckdb_path = Path(duckdb_path).expanduser()
-        else:
-            duckdb_path = Path.home() / ".blueplane" / "analytics.duckdb"
+        duckdb_path = self.config.get_path("paths.database.analytics_db")
         
         # Initialize state variables (always, even if disabled)
         self.running = False
