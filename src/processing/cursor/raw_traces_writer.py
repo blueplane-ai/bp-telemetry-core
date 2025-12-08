@@ -158,6 +158,10 @@ class CursorRawTracesWriter:
         is_archived = self._safe_get_bool(full_data, "isArchived")
         has_unread_messages = self._safe_get_bool(full_data, "hasUnreadMessages")
 
+        # Model usage fields (extracted from usageData in composerData)
+        # The model name is the KEY of the usageData dictionary!
+        model_name, model_cost_cents, model_response_count, models_used = self._extract_model_usage(full_data)
+
         # Compress full event data (use original full_data_raw to preserve lists)
         event_data_compressed = self.batch_writer.compress_event(full_data_raw)
 
@@ -197,6 +201,10 @@ class CursorRawTracesWriter:
             selections,
             is_archived,
             has_unread_messages,
+            model_name,
+            model_cost_cents,
+            model_response_count,
+            models_used,
             event_data_compressed,
         )
 
@@ -223,8 +231,9 @@ class CursorRawTracesWriter:
             capabilities_ran, capability_statuses,
             project_name, relevant_files, selections,
             is_archived, has_unread_messages,
+            model_name, model_cost_cents, model_response_count, models_used,
             event_data
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
         try:
@@ -301,3 +310,44 @@ class CursorRawTracesWriter:
             return json.dumps(value)
         except (TypeError, ValueError):
             return None
+
+    def _extract_model_usage(self, data: dict) -> tuple:
+        """
+        Extract model usage information from composer's usageData field.
+        
+        The model name is stored as the KEY of the usageData dictionary!
+        Example input:
+            {"usageData": {"claude-4.5-opus-high-thinking": {"costInCents": 141, "amount": 23}}}
+        
+        Returns:
+            Tuple of (model_name, model_cost_cents, model_response_count, models_used)
+        """
+        usage_data = data.get("usageData", {})
+        
+        if not usage_data or not isinstance(usage_data, dict):
+            return (None, None, None, None)
+        
+        # Get all model names (keys of the dict)
+        model_names = list(usage_data.keys())
+        
+        if not model_names:
+            return (None, None, None, None)
+        
+        # Use primary model (first one, or highest cost if multiple)
+        if len(model_names) == 1:
+            primary_model = model_names[0]
+        else:
+            # Sort by cost to get the primary model
+            primary_model = max(
+                model_names,
+                key=lambda m: usage_data.get(m, {}).get("costInCents", 0)
+            )
+        
+        primary_stats = usage_data.get(primary_model, {})
+        model_cost_cents = primary_stats.get("costInCents")
+        model_response_count = primary_stats.get("amount")
+        
+        # Include all models JSON if multiple
+        models_used = json.dumps(model_names) if len(model_names) > 1 else None
+        
+        return (primary_model, model_cost_cents, model_response_count, models_used)

@@ -148,9 +148,75 @@ class ComposerDataExtractor:
                     "force_mode": data.get("forceMode"),
                     "status": data.get("status"),
                     "token_count": data.get("tokenCount"),
+                    # Model usage from usageData field (model name is the key!)
+                    # Example: {"claude-4.5-opus-high-thinking": {"costInCents": 141, "amount": 23}}
+                    **self._extract_model_usage(data.get("usageData", {})),
                 },
                 "full_data": data
             }
+        }
+
+    def _extract_model_usage(self, usage_data: Optional[dict]) -> dict:
+        """
+        Extract model usage information from composer's usageData field.
+        
+        The model name is stored as the KEY of the usageData dictionary!
+        Example input:
+            {"claude-4.5-opus-high-thinking": {"costInCents": 141, "amount": 23}}
+        
+        Returns:
+            dict with model_name, model_cost_cents, model_response_count, models_used
+        """
+        if not usage_data or not isinstance(usage_data, dict):
+            return {
+                "model_name": None,
+                "model_cost_cents": None,
+                "model_response_count": None,
+                "models_used": None,
+            }
+        
+        # Get all model names (keys of the dict)
+        model_names = list(usage_data.keys())
+        
+        if not model_names:
+            return {
+                "model_name": None,
+                "model_cost_cents": None,
+                "model_response_count": None,
+                "models_used": None,
+            }
+        
+        # Use primary model (first one, or highest cost if multiple)
+        if len(model_names) == 1:
+            primary_model = model_names[0]
+        else:
+            # Sort by cost to get the primary model
+            primary_model = max(
+                model_names,
+                key=lambda m: usage_data.get(m, {}).get("costInCents", 0)
+            )
+        
+        primary_stats = usage_data.get(primary_model, {})
+        
+        # Calculate totals across all models
+        total_cost = sum(
+            stats.get("costInCents", 0) 
+            for stats in usage_data.values() 
+            if isinstance(stats, dict)
+        )
+        total_responses = sum(
+            stats.get("amount", 0) 
+            for stats in usage_data.values() 
+            if isinstance(stats, dict)
+        )
+        
+        return {
+            "model_name": primary_model,
+            "model_cost_cents": primary_stats.get("costInCents"),
+            "model_response_count": primary_stats.get("amount"),
+            "models_used": json.dumps(model_names) if len(model_names) > 1 else None,
+            "total_cost_cents": total_cost if total_cost > 0 else None,
+            "total_model_responses": total_responses if total_responses > 0 else None,
         }
 
     def _extract_bubble_event(
