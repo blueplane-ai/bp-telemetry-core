@@ -84,6 +84,8 @@ class AnalyticsProcessor:
         # Initialize state variables (always, even if disabled)
         self.running = False
         self._task: Optional[asyncio.Task] = None
+        self.duckdb_writer: Optional[DuckDBWriter] = None
+        self.sqlite_reader: Optional[SQLiteReader] = None
         
         if not self.enabled:
             logger.info("Analytics processor is disabled")

@@ -214,12 +214,15 @@ class DuckDBWriter:
             sequence = trace.get('sequence')
             timestamp = trace.get('timestamp')
             
-            # Parse timestamp if it's a string
+            # Parse timestamp if it's a string, default to now if None or invalid
             if isinstance(timestamp, str):
                 try:
                     timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                 except ValueError:
                     timestamp = datetime.now()
+            elif timestamp is None:
+                # Default to current time if timestamp is missing
+                timestamp = datetime.now()
             
             # Extract workspace path from event_data if available
             workspace_path = event_data.get('workspace_path') or event_data.get('workspace_name') or ''
