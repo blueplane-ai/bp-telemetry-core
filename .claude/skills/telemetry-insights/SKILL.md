@@ -140,6 +140,7 @@ Cross-reference with git to classify churn:
 15. **Session_Focus_Profile**: short_bursts/long_deep_work/mixed
 16. **Workflow_Quality_Score** (0-1): based on read-before-edit ratio, productive vs wasteful churn
 17. **Development_Discipline**: careful (high read-first) vs reactive (low read-first, high trial-and-error)
+18. **Platform_Retry_Patterns**: counts of cases where a request fails on one platform (e.g., Cursor capability) and a similar request shortly after on the other platform (e.g., Claude Code tool_use) succeeds
 
 ---
 
