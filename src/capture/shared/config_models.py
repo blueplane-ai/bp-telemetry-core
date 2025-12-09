@@ -20,6 +20,7 @@ from pathlib import Path
 class DatabasePathsConfig:
     """Database file paths."""
     telemetry_db: Path
+    analytics_db: Path  # DuckDB analytics database
     cursor_history_db: Path
     event_buffer_db: Path
     workspace_cache: Path

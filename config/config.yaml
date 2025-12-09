@@ -21,6 +21,7 @@ paths:
   # Database paths
   database:
     telemetry_db: "~/.blueplane/telemetry.db"
+    analytics_db: "~/.blueplane/analytics.duckdb"  # DuckDB analytics database
     cursor_history_db: "~/.blueplane/cursor_history.duckdb"
     event_buffer_db: "~/.blueplane/event_buffer.db"
     workspace_cache: "~/.blueplane/workspace_db_cache.json"
@@ -40,8 +41,6 @@ paths:
     workspace_storage: "~/Library/Application Support/Cursor/User/workspaceStorage"
     user_db: "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
 
-  # Cursor markdown output (null = use workspace/.history/)
-  cursor_markdown_output: null
 
 # =============================================================================
 # REDIS
@@ -135,9 +134,6 @@ monitoring:
     dedup_window_hours: 24
     max_concurrent_workspaces: 10
 
-  cursor_markdown:
-    poll_interval: 120.0 # seconds (2 minutes)
-    debounce_delay: 10.0 # seconds
 
   claude_jsonl:
     poll_interval: 30.0 # seconds
@@ -188,8 +184,12 @@ http_endpoint:
   port: 8787
 
 # =============================================================================
-# FEATURES
+# ANALYTICS PROCESSOR
 # =============================================================================
-features:
-  duckdb_sink:
-    enabled: false
+analytics:
+  enabled: true  # Enable analytics processor (reads from SQLite, writes to DuckDB)
+  processing_interval: 300  # seconds (5 minutes default)
+  batch_size: 1000  # traces per batch
+  # Database paths are configured in paths.database section:
+  # - SQLite: paths.database.telemetry_db
+  # - DuckDB: paths.database.analytics_db
