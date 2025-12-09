@@ -535,13 +535,14 @@ class DuckDBWriter:
             self.connect()
         
         timestamp_str = timestamp.isoformat() if timestamp else None
+        # Use now() function for DuckDB current timestamp in UPDATE
         self._connection.execute("""
             INSERT INTO analytics_processing_state (platform, last_processed_sequence, last_processed_timestamp)
             VALUES (?, ?, ?)
             ON CONFLICT (platform) DO UPDATE SET
                 last_processed_sequence = EXCLUDED.last_processed_sequence,
                 last_processed_timestamp = EXCLUDED.last_processed_timestamp,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = now()
         """, (platform, sequence, timestamp_str))
         
         logger.debug(f"Updated processing state for {platform}: sequence={sequence}")
