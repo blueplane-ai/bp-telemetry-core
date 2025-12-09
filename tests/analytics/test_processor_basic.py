@@ -22,8 +22,21 @@ class TestAnalyticsProcessorInit:
 
     def test_init_with_default_config(self):
         """Test initialization with default config."""
-        processor = AnalyticsProcessor()
-        assert processor.enabled is False  # Default is disabled
+        # Create processor with explicit disabled config since default is now enabled
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text("""
+paths:
+  database:
+    telemetry_db: "{tmpdir}/telemetry.db"
+    analytics_db: "{tmpdir}/analytics.duckdb"
+
+analytics:
+  enabled: false
+""".format(tmpdir=tmpdir))
+            config = Config(config_dir=tmpdir)
+            processor = AnalyticsProcessor(config=config)
+            assert processor.enabled is False
         assert processor.processing_interval == 300
         assert processor.batch_size == 1000
         assert processor.duckdb_writer is None
@@ -80,7 +93,20 @@ analytics:
 
     def test_init_disabled_attributes_initialized(self):
         """Test that attributes are initialized even when disabled."""
-        processor = AnalyticsProcessor()
+        # Create processor with explicit disabled config
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text("""
+paths:
+  database:
+    telemetry_db: "{tmpdir}/telemetry.db"
+    analytics_db: "{tmpdir}/analytics.duckdb"
+
+analytics:
+  enabled: false
+""".format(tmpdir=tmpdir))
+            config = Config(config_dir=tmpdir)
+            processor = AnalyticsProcessor(config=config)
         
         # Attributes should exist even when disabled
         assert processor.duckdb_writer is None
