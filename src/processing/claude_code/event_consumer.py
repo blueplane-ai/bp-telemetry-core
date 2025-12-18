@@ -627,7 +627,9 @@ class ClaudeEventConsumer:
 
         logger.info(f"Claude Code event consumer started: {self.consumer_name}")
 
+        iteration = 0
         while self.running:
+            iteration += 1
             try:
                 # Check pending message count - prioritize if backlog is significant
                 pending_count = self._get_pending_count()
