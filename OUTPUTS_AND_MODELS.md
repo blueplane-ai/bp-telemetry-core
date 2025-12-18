@@ -442,9 +442,9 @@ CREATE TABLE trace_stats (
 
 ### 4.1 Message Queue Stream
 
-**Stream**: `telemetry:events`
+**Stream**: `telemetry:message_queue`
 
-Primary event stream for real-time processing.
+Primary event stream for real-time processing. All producers (HTTP hooks, JSONL monitor, database monitors) write to this stream.
 
 **Format**:
 ```
@@ -469,13 +469,13 @@ Stream Entry:
 **Commands**:
 ```bash
 # Check stream length
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 
 # View recent events
-redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+redis-cli XREAD COUNT 5 STREAMS telemetry:message_queue 0-0
 
 # Monitor stream in real-time
-redis-cli XREAD BLOCK 1000 COUNT 10 STREAMS telemetry:events $
+redis-cli XREAD BLOCK 1000 COUNT 10 STREAMS telemetry:message_queue $
 ```
 
 ### 4.2 CDC Event Stream

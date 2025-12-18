@@ -1,0 +1,45 @@
+# Exclude development files from VSIX package
+
+# Source files (we only need compiled output)
+src/**
+**/*.ts
+!out/**/*.ts
+
+# Development tools
+.vscode/**
+.vscode-test/**
+.gitignore
+.yarnrc
+.eslintrc.json
+tsconfig.json
+vsc-extension-quickstart.md
+
+# Build artifacts
+**/*.map
+.DS_Store
+
+# Documentation
+README.md
+
+# Old backup files
+**/*.old
+**/*.bak
+
+# Test files
+**/test/**
+**/*.test.js
+**/*.spec.js
+
+# Git
+.git/**
+.github/**
+
+# Logs
+*.log
+logs/**
+
+# Exclude dev dependencies from node_modules (keep production dependencies)
+node_modules/@types/**
+node_modules/@typescript-eslint/**
+node_modules/eslint/**
+node_modules/typescript/**

@@ -203,7 +203,7 @@ class TelemetryServer:
     def _initialize_consumer(self) -> None:
         """Initialize fast path consumer."""
         logger.info("Initializing fast path consumer")
-        
+
         stream_config = self.config.get_stream_config("message_queue")
         cdc_config = self.config.get_stream_config("cdc")
         
@@ -249,8 +249,8 @@ class TelemetryServer:
         logger.info("Initializing HTTP endpoint for hook events")
 
         # Create queue writer for the HTTP endpoint
-        # Use "events" stream (telemetry:events) for hook events
-        self.queue_writer = MessageQueueWriter(self.config, stream_type="events")
+        # Use "message_queue" stream for hook events (same stream session_monitor reads from)
+        self.queue_writer = MessageQueueWriter(self.config, stream_type="message_queue")
 
         # Get configuration from config.yaml (SERVER side)
         host = http_config.get("host", "127.0.0.1")
@@ -366,7 +366,8 @@ class TelemetryServer:
         # Pass sqlite_client for database persistence
         self.claude_session_monitor = ClaudeCodeSessionMonitor(
             redis_client=self.redis_client,
-            sqlite_client=self.sqlite_client
+            sqlite_client=self.sqlite_client,
+            stream_name=stream_config.name,
         )
         
         # Create timeout manager for abandoned sessions
@@ -749,12 +750,60 @@ class TelemetryServer:
 
 
 def setup_logging(level: str = "INFO") -> None:
-    """Setup logging configuration."""
-    logging.basicConfig(
-        level=getattr(logging, level.upper()),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    """
+    Setup logging configuration with file rotation.
+
+    Logs to both console (stdout) and rotating file (~/.blueplane/server.log).
+    File rotation prevents unbounded disk usage.
+    """
+    from logging.handlers import RotatingFileHandler
+
+    # Load config for rotation settings
+    try:
+        config = Config()
+        max_bytes = config.get("logging.rotation.max_bytes", 10485760)  # 10 MB default
+        backup_count = config.get("logging.rotation.backup_count", 5)  # 5 backups default
+    except Exception:
+        # Fallback to defaults if config load fails
+        max_bytes = 10485760  # 10 MB
+        backup_count = 5
+
+    # Ensure log directory exists
+    log_dir = Path.home() / ".blueplane"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "server.log"
+
+    # Create formatters
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
+
+    # Get root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, level.upper()))
+
+    # Remove any existing handlers
+    root_logger.handlers.clear()
+
+    # Console handler (stdout)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(getattr(logging, level.upper()))
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+
+    # Rotating file handler
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+        encoding='utf-8'
+    )
+    file_handler.setLevel(getattr(logging, level.upper()))
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+
+    logger.info(f"Logging initialized: level={level}, file={log_file}, max_size={max_bytes/1024/1024:.1f}MB, backups={backup_count}")
 
 
 def main() -> None:

@@ -57,7 +57,7 @@ graph TB
 
     subgraph "Message Queue Layer"
         EQ[Event Queuer]
-        RQ[Redis Stream<br/>telemetry:events]
+        RQ[Redis Stream<br/>telemetry:message_queue]
         CG[Consumer Group<br/>processors]
         UC --> EQ
         EQ --> RQ
@@ -573,7 +573,7 @@ class EventQueuer:
 
     def __init__(self, redis_client: redis.Redis):
         self.redis_client = redis_client
-        self.stream_name = "telemetry:events"
+        self.stream_name = "telemetry:message_queue"
         self.max_stream_length = 10000
         self.consumer_group = "processors"
 
@@ -707,7 +707,7 @@ class EventConsumer:
     def __init__(
         self,
         redis_client: redis.Redis,
-        stream_name: str = "telemetry:events",
+        stream_name: str = "telemetry:message_queue",
         consumer_group: str = "processors",
         consumer_name: str = None
     ):
@@ -1565,7 +1565,7 @@ async def _monitoring_loop(self):
 
 | Component | Location | Purpose | Changes Needed |
 |-----------|----------|---------|----------------|
-| Redis Streams | `telemetry:events` | Message queue with at-least-once delivery | Add ACK support (XACK) |
+| Redis Streams | `telemetry:message_queue` | Message queue with at-least-once delivery | Add ACK support (XACK) |
 | Consumer Groups | `processors` group | Event processing with PEL support | Add proper ACK handling |
 | XREADGROUP/XACK | Redis native | Reliable message consumption | Implement in consumers |
 | Event Consumer | `src/processing/cursor/event_consumer.py` | Batch processing | Add ACK after successful writes |
@@ -2044,7 +2044,7 @@ async def test_data_flow():
     await asyncio.sleep(15)  # Debounce + processing
 
     # Verify event in Redis
-    events = redis_client.xrange("telemetry:events", "-", "+")
+    events = redis_client.xrange("telemetry:message_queue", "-", "+")
     assert len(events) > 0
 ```
 

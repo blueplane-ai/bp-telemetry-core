@@ -95,7 +95,7 @@ def initialize_streams(host: str, port: int) -> bool:
 
         # Define streams and consumer groups
         streams = [
-            ('telemetry:events', 'processors'),
+            ('telemetry:message_queue', 'processors'),
             ('cdc:events', 'workers'),
         ]
 
@@ -131,7 +131,7 @@ def verify_setup(host: str, port: int) -> bool:
         print("\n🔍 Verifying Redis setup...")
 
         # Check streams exist
-        streams = ['telemetry:events', 'cdc:events']
+        streams = ['telemetry:message_queue', 'cdc:events']
         for stream in streams:
             try:
                 info = client.xinfo_stream(stream)
@@ -142,7 +142,7 @@ def verify_setup(host: str, port: int) -> bool:
 
         # Check consumer groups
         groups = [
-            ('telemetry:events', 'processors'),
+            ('telemetry:message_queue', 'processors'),
             ('cdc:events', 'workers'),
         ]
         for stream, group in groups:
@@ -169,19 +169,30 @@ def verify_setup(host: str, port: int) -> bool:
 
 def main():
     """Main entry point."""
+    # Load config to get default Redis connection settings
+    default_host = 'localhost'
+    default_port = 6379
+    try:
+        config = Config()
+        redis_config = config.redis
+        default_host = redis_config.host
+        default_port = redis_config.port
+    except Exception as e:
+        print(f"Warning: Could not load config, using defaults: {e}", file=sys.stderr)
+
     parser = argparse.ArgumentParser(
         description='Initialize Redis Streams for Blueplane Telemetry'
     )
     parser.add_argument(
         '--host',
-        default='localhost',
-        help='Redis host (default: localhost)'
+        default=default_host,
+        help=f'Redis host (default: {default_host} from config)'
     )
     parser.add_argument(
         '--port',
         type=int,
-        default=6379,
-        help='Redis port (default: 6379)'
+        default=default_port,
+        help=f'Redis port (default: {default_port} from config)'
     )
     parser.add_argument(
         '--verify-only',

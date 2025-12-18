@@ -13,12 +13,18 @@ This avoids hardcoded string values and confusion about stream naming.
 # TELEMETRY STREAMS
 # =============================================================================
 
-# Main event stream for all telemetry events from hooks/monitors
-# Used by: hooks, monitors → event consumers
-TELEMETRY_EVENTS_STREAM = "telemetry:events"
-
-# Message queue for asynchronous event processing
-# Used by: JSONL monitor, transcript monitor → event processors
+# Primary event stream for all telemetry events
+# This is the central message queue for real-time telemetry event processing.
+#
+# Producers (write to this stream):
+#   - HTTP endpoint: Claude Code hooks (session_start, session_end, tool_use, etc.)
+#   - JSONL monitor: Claude Code transcript trace events
+#   - Database monitors: Cursor workspace database change events
+#
+# Consumers (read from this stream):
+#   - ClaudeEventConsumer: Processes Claude Code events → claude_raw_traces table
+#   - CursorEventConsumer: Processes Cursor events → cursor_raw_traces table
+#   - Session monitors: Track active Claude Code and Cursor sessions
 TELEMETRY_MESSAGE_QUEUE_STREAM = "telemetry:message_queue"
 
 # Dead Letter Queue for failed messages
@@ -39,7 +45,6 @@ CDC_EVENTS_STREAM = "cdc:events"
 
 # Map stream types to their full names (for config lookup)
 STREAM_NAME_MAP = {
-    "events": TELEMETRY_EVENTS_STREAM,
     "message_queue": TELEMETRY_MESSAGE_QUEUE_STREAM,
     "dlq": TELEMETRY_DLQ_STREAM,
     "cdc": CDC_EVENTS_STREAM,
@@ -51,10 +56,10 @@ def get_stream_name(stream_type: str) -> str:
     Get the full stream name for a given stream type.
 
     Args:
-        stream_type: Stream type identifier (e.g., "events", "message_queue", "dlq", "cdc")
+        stream_type: Stream type identifier (e.g., "message_queue", "dlq", "cdc")
 
     Returns:
-        Full stream name (e.g., "telemetry:events")
+        Full stream name (e.g., "telemetry:message_queue")
 
     Raises:
         ValueError: If stream_type is not recognized

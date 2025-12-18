@@ -22,7 +22,7 @@ This document outlines the steps required to implement **Layer 2: Processing Pip
 1. **Cursor Hooks** (`src/capture/cursor/hooks/`)
    - 9 hook scripts that capture events
    - Write events to Redis Streams via `MessageQueueWriter`
-   - Events are in Redis Stream `telemetry:events`
+   - Events are in Redis Stream `telemetry:message_queue`
 
 2. **Event Schema** (`src/capture/shared/event_schema.py`)
    - Standardized event format
@@ -415,7 +415,7 @@ aioredis>=2.0.0       # Async Redis (optional, can use redis with asyncio)
 
 After implementation, verify:
 
-- [ ] Redis Stream `telemetry:events` is being consumed
+- [ ] Redis Stream `telemetry:message_queue` is being consumed
 - [ ] SQLite database `~/.blueplane/telemetry.db` exists
 - [ ] Platform-specific tables (`cursor_raw_traces`, `claude_raw_traces`) have rows
 - [ ] Events are compressed (check BLOB size)

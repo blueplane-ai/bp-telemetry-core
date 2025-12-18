@@ -354,7 +354,7 @@ class ConversationWorker:
             │                                   │
             ▼                                   ▼
 ┌───────────────────────────────────────────────────────────────────┐
-│                    Redis Stream (telemetry:events)                │
+│                Redis Stream (telemetry:message_queue)             │
 └───────────┬──────────────────────────────────┬────────────────────┘
             │                                   │
             ▼                                   ▼

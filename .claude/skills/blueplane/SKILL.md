@@ -228,16 +228,16 @@ pkill -f "tail -f.*server.log"
 
 ```bash
 # Check stream lengths
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 redis-cli XLEN telemetry:message_queue
 redis-cli XLEN cdc:events
 
 # Check consumer groups
-redis-cli XINFO GROUPS telemetry:events
+redis-cli XINFO GROUPS telemetry:message_queue
 redis-cli XINFO GROUPS cdc:events
 
 # Check pending messages
-redis-cli XPENDING telemetry:events processors
+redis-cli XPENDING telemetry:message_queue processors
 ```
 
 ### Check Database
@@ -388,7 +388,7 @@ python scripts/server_ctl.py status --verbose
 redis-cli PING
 
 # Check consumer groups
-redis-cli XINFO GROUPS telemetry:events
+redis-cli XINFO GROUPS telemetry:message_queue
 
 # Restart server
 python scripts/server_ctl.py restart --daemon
@@ -401,7 +401,7 @@ python scripts/server_ctl.py restart --daemon
 ps aux | grep server.py
 
 # Check stream lengths (may be backlog)
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 redis-cli XLEN cdc:events
 
 # Check logs for errors
@@ -579,7 +579,7 @@ Stores Cursor IDE window sessions (Cursor only, no Claude Code sessions).
 
 Redis streams are used for message queuing and event processing:
 
-- `telemetry:events` - Main event stream (from capture → processing)
+- `telemetry:message_queue` - Main event stream (from capture → processing)
 - `telemetry:message_queue` - Legacy stream name
 - `cdc:events` - Change data capture events (database updates)
 

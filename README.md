@@ -89,12 +89,14 @@ python scripts/server_ctl.py start --daemon
 # python scripts/server_ctl.py status --verbose  # Check server status
 # python scripts/server_ctl.py stop             # Graceful shutdown
 # python scripts/server_ctl.py restart --daemon # Restart server
+# python scripts/server_ctl.py logs -f          # Stream logs in real-time
+# python scripts/server_ctl.py logs -n 100      # View last 100 lines
 
 # 9. Verify installation
 # Check extension is active in Cursor: Extensions → Blueplane Telemetry
 # Check processing server: python scripts/server_ctl.py status
 # View logs: tail -f ~/.blueplane/server.log
-# Monitor Redis: redis-cli XLEN telemetry:events
+# Monitor Redis: redis-cli XLEN telemetry:message_queue
 ```
 
 ### Installation (Claude Code)
@@ -141,9 +143,11 @@ python scripts/install_claude_hooks_http.py
 python scripts/server_ctl.py start --daemon
 
 # Server management:
-# python scripts/server_ctl.py status   # Check status
-# python scripts/server_ctl.py stop     # Stop server
-# tail -f ~/.blueplane/server.log       # View logs
+# python scripts/server_ctl.py status --verbose  # Check status
+# python scripts/server_ctl.py stop              # Stop server
+# python scripts/server_ctl.py logs -f           # Stream logs in real-time
+# python scripts/server_ctl.py logs -n 100       # View last 100 lines
+# tail -f ~/.blueplane/server.log                # Alternative: direct log file access
 
 # 8. Verify installation
 # Check hooks are installed
@@ -152,14 +156,19 @@ ls -la ~/.claude/hooks/telemetry/
 # Check server is running
 python scripts/server_ctl.py status --verbose
 
-# View server logs
+# View server logs (using server_ctl - recommended)
+python scripts/server_ctl.py logs -f  # Stream logs in real-time
+python scripts/server_ctl.py logs -n 50  # View last 50 lines
+python scripts/server_ctl.py logs --all-files  # Include rotated log backups
+
+# Alternative: Direct log file access
 tail -f ~/.blueplane/server.log
 
 # Check Redis queue
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 
 # View recent events
-redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+redis-cli XREAD COUNT 5 STREAMS telemetry:message_queue 0-0
 ```
 
 ### Verification (Claude Code)
@@ -170,14 +179,19 @@ After installation, the hooks will capture events automatically as you work in C
 # Check hooks are configured in settings
 cat ~/.claude/settings.json | grep -A 5 "hooks"
 
-# View server logs
+# View server logs (using server_ctl - recommended)
+python scripts/server_ctl.py logs -f  # Stream logs in real-time
+python scripts/server_ctl.py logs -n 50  # View last 50 lines
+python scripts/server_ctl.py logs --all-files  # Include rotated log backups
+
+# Alternative: Direct log file access
 tail -f ~/.blueplane/server.log
 
 # Check Redis queue
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 
 # View recent events
-redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+redis-cli XREAD COUNT 5 STREAMS telemetry:message_queue 0-0
 
 # Check SQLite database (events are stored here)
 python -c "
@@ -204,10 +218,10 @@ After installation, the extension and database monitor will automatically captur
 
 ```bash
 # Check Redis queue
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 
 # View recent events
-redis-cli XREAD COUNT 5 STREAMS telemetry:events 0-0
+redis-cli XREAD COUNT 5 STREAMS telemetry:message_queue 0-0
 
 # Check SQLite database (events are stored here)
 python -c "

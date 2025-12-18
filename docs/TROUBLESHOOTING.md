@@ -11,7 +11,7 @@ python scripts/server_ctl.py status --verbose
 # Or check manually:
 # - Extension status in Cursor
 # - Processing server: ps aux | grep start_server.py
-# - Redis: redis-cli PING && redis-cli XLEN telemetry:events
+# - Redis: redis-cli PING && redis-cli XLEN telemetry:message_queue
 ```
 
 Or manually check each component:
@@ -25,8 +25,8 @@ ls -la ~/.claude/hooks/telemetry/*.py | wc -l
 cat ~/.claude/settings.json | jq '.hooks | length'
 
 # 3. Check Redis queue
-redis-cli XLEN telemetry:events
-redis-cli XINFO GROUPS telemetry:events
+redis-cli XLEN telemetry:message_queue
+redis-cli XINFO GROUPS telemetry:message_queue
 
 # 4. Check database (cursor events)
 sqlite3 ~/.blueplane/telemetry.db "SELECT COUNT(*) FROM cursor_raw_traces;"
@@ -75,7 +75,7 @@ python scripts/start_server.py
 **Symptom:**
 
 ```bash
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 # Returns large number (e.g., 403)
 ```
 
@@ -94,7 +94,7 @@ python scripts/start_server.py
 
 ```bash
 # In another terminal, watch the queue drain
-watch -n 1 'redis-cli XLEN telemetry:events'
+watch -n 1 'redis-cli XLEN telemetry:message_queue'
 ```
 
 ---
@@ -338,7 +338,7 @@ SQLite is configured with WAL mode to prevent this, but if it persists:
 **Watch Redis queue:**
 
 ```bash
-watch -n 1 'redis-cli XLEN telemetry:events'
+watch -n 1 'redis-cli XLEN telemetry:message_queue'
 ```
 
 **Monitor processing server logs:**
@@ -381,7 +381,7 @@ Expected output:
 
 ```bash
 # Redis queue length
-redis-cli XLEN telemetry:events
+redis-cli XLEN telemetry:message_queue
 
 # Database event count (Cursor)
 sqlite3 ~/.blueplane/telemetry.db "SELECT COUNT(*) FROM cursor_raw_traces;"
@@ -390,7 +390,7 @@ sqlite3 ~/.blueplane/telemetry.db "SELECT COUNT(*) FROM cursor_raw_traces;"
 sqlite3 ~/.blueplane/telemetry.db "SELECT event_type, COUNT(*) FROM cursor_raw_traces WHERE timestamp > datetime('now', '-1 hour') GROUP BY event_type;"
 
 # Redis consumer group info
-redis-cli XINFO GROUPS telemetry:events
+redis-cli XINFO GROUPS telemetry:message_queue
 
 # Processing server status
 ps aux | grep start_server.py
@@ -405,7 +405,7 @@ python scripts/test_end_to_end.py
 # Check installation manually:
 # - Extension status in Cursor
 # - Processing server: ps aux | grep start_server.py
-# - Redis: redis-cli PING && redis-cli XLEN telemetry:events
+# - Redis: redis-cli PING && redis-cli XLEN telemetry:message_queue
 ```
 
 ---
