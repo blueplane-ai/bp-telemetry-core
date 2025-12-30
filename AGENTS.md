@@ -14,13 +14,6 @@ This file provides guidance to Claude Code (claude.ai/code) and other AI assista
 
 ## Implementation Planning
 
-**REQUIRED: When planning any feature implementation, you MUST invoke the `implementation-planning` skill.** Use `/implementation-planning` or the Skill tool to activate it. This applies when:
-
-- In plan mode and planning a feature implementation
-- Writing a plan document to `docs/`
-- The user requests an implementation plan
-- Starting any non-trivial coding task that requires planning
-
 **Key planning requirements:**
 
 - Always use Mermaid for diagrams, never ASCII art
