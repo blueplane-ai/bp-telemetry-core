@@ -8,40 +8,23 @@ License-Filename: LICENSE
 
 This file provides guidance to Claude Code (claude.ai/code) and other AI assistants when working with code in this repository.
 
-## Work Tracking
+## Important Development Rules
 
-**IMPORTANT**: Use the `bd` command (beads issue tracker) for tracking all new work instead of markdown todo lists. Create issues for features, bugs, and tasks using:
+**NEVER use regex-based find-and-replace across files without explicit approval from the user.** Always ask for permission before performing bulk find-and-replace operations using regular expressions.
 
-```bash
-bd create "Task description" -p <priority>
-bd list                    # View open issues
-bd ready                    # Show work-ready issues
-bd complete <issue-id>      # Mark as done
-```
+## Implementation Planning
 
-See the beads documentation for full command reference. All development work should be tracked as beads issues.
+**Key planning requirements:**
 
-### Initializing Beads in a New Worktree
-
-When checking out a new git worktree, the `.beads/beads.db` file (SQLite cache) won't exist because it's gitignored. The source of truth is `.beads/issues.jsonl` (git-tracked).
-
-**Agent initialization workflow:**
-
-1. **Check if beads is available**: Verify `.beads/` directory exists
-2. **If `beads.db` is missing but `issues.jsonl` exists**: Run `bd sync --import-only` to import issues from JSONL into the local database cache
-3. **Then proceed with normal session start**: Run `bd ready --json` to check available work
-
-**Example initialization:**
-
-```bash
-# After checking out new worktree
-if [ -d .beads ] && [ -f .beads/issues.jsonl ] && [ ! -f .beads/beads.db ]; then
-    bd sync --import-only
-fi
-bd ready --json
-```
-
-**Note**: Beads will auto-import from JSONL on first command if the database is missing, but explicitly running `bd sync --import-only` ensures the database is initialized before checking for work.
+- Always use Mermaid for diagrams, never ASCII art
+- Ask clarifying questions about migrations, deprecation, and architecture decisions
+- Plan in horizontal slices (layer-by-layer: DB, API, Frontend), not vertical slices
+- Include comprehensive unit test planning for every phase, mocking other layers
+- Never write code snippets or pseudocode in plans
+- Never include dev-hour scoping or time estimates
+- List external dependencies at the top of plan documents
+- Identify when an ADR is needed (if "why did we do it this way?" won't be obvious in 3 months)
+- No emojis in markdown documents
 
 ## Project Overview
 
@@ -258,6 +241,7 @@ See: [layer2_db_architecture.md](docs/architecture/layer2_db_architecture.md)
 - **Monitor**: File watching with debouncing, SQLite WAL monitoring, incremental sync
 - **Key Insight**: Conversation bubbles are stored separately from composer metadata
 - See: [CURSOR_RAW_TRACES_CAPTURE.md](docs/CURSOR_RAW_TRACES_CAPTURE.md) for complete capture specification
+- See: [CURSOR_RAW_TRACES_AUDIT.md](docs/CURSOR_RAW_TRACES_AUDIT.md) for detailed data structures and field mappings
 
 **Additional Platforms**:
 
@@ -336,6 +320,42 @@ tests/
 - **Eventual Consistency**: Metrics can lag by seconds
 - **Error Resilience**: Failed events go to DLQ, never block
 - **Zero Config**: Works out of the box with defaults, optional `~/.blueplane/config.yaml` for customization
+
+## Documentation Standards
+
+### Diagrams
+
+**Always use Mermaid** for diagrams in markdown files. Mermaid renders natively in GitHub, GitLab, and most markdown viewers.
+
+Supported diagram types:
+
+- `flowchart` / `graph` - Architecture and data flow diagrams
+- `sequenceDiagram` - Interaction flows between components
+- `stateDiagram-v2` - State machines and lifecycle diagrams
+- `erDiagram` - Database entity relationships
+- `gantt` - Implementation timelines and phases
+- `classDiagram` - Class structures and relationships
+
+Example:
+
+````markdown
+```mermaid
+flowchart LR
+    A[Input] --> B[Process] --> C[Output]
+```
+````
+
+**Do not use:**
+
+- ASCII art diagrams (e.g., boxes made with `┌───┐`)
+- External image files for diagrams
+- PlantUML or other diagram formats
+
+This ensures diagrams are:
+
+- Version-controlled as text
+- Editable without special tools
+- Rendered consistently across platforms
 
 ### Performance Requirements
 
@@ -598,7 +618,3 @@ sqlite3 ~/Library/Application\ Support/Cursor/User/workspaceStorage/*/state.vscd
 - Check config syntax: `python -c "import yaml; yaml.safe_load(open('config/config.yaml'))"`
 - Verify path expansion: `python -c "from src.capture.shared.config import Config; c = Config(); print(c.get_path('paths.database.telemetry_db'))"`
 - Check Redis connection settings match your Redis instance
-
----
-
-Remember: **Privacy First, Performance Critical, Local Only**
