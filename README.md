@@ -489,6 +489,27 @@ black src/
 mypy src/
 ```
 
+### Integration Testing
+
+Real CLI integration tests are available in `testing_integration/`. These tests invoke actual CLI tools (Claude, Cursor) and verify telemetry capture.
+
+```bash
+# Install orchestration framework (required for integration tests)
+pip install jleechanorg-orchestration
+
+# Run Claude integration test
+python testing_integration/test_claude_telemetry.py
+
+# Run Cursor integration test (expected to fail - see note below)
+python testing_integration/test_cursor_telemetry.py
+```
+
+**Note:** The Cursor test is expected to fail because:
+- Cursor IDE writes to: `~/Library/Application Support/Cursor/User/.../state.vscdb` (monitored)
+- cursor-agent CLI writes to: `~/.cursor/chats/{hash}/{uuid}/store.db` (not monitored)
+
+See `testing_integration/test_cursor_telemetry.py` for details.
+
 ### Project Structure
 
 ```
