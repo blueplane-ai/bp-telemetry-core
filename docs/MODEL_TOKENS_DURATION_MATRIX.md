@@ -138,7 +138,8 @@ Events with duration_ms > 0: 0
 | --------------- | ------------------------- | ------ | ----------------------------------------------------------------------------------------- |
 | **Cursor**      | `afterAgentResponse` hook | ❌     | ❌ **VERIFIED** - Cursor not providing in hook input (all empty)                          |
 | **Cursor**      | Database trace (TS)       | ❌     | ❌ **VERIFIED** - Not producing traces (tries to query non-existent table)                |
-| **Cursor**      | Database trace (Python)   | ❌     | ❌ **VERIFIED** - ItemTable doesn't contain model field (hardcoded "unknown" placeholder) |
+| **Cursor**      | Database trace (Python)   | ✅📝🔍 | ✅ **FIXED** - Model extracted from `composerData.usageData` (model name is dictionary KEY!) |
+| **Cursor**      | `usageData` in composer   | ✅📝🔍 | ✅ **NEW** - Model, cost, and response count available per-composer |
 | **Claude Code** | `Stop` hook               | ❌     | Not provided in hook input                                                                |
 | **Claude Code** | Transcript trace          | ✅📝🔍 | ✅ **FIXED** - Extracts from `entry['message']['model']` (70% of entries have model)      |
 
@@ -172,6 +173,36 @@ Events with duration_ms > 0: 0
 1. **Extraction Logic**: Database writer correctly handles both `tokens` and `tokens_used` field names
 2. **Empty String Handling**: Model empty strings are converted to `NULL` in database
 3. **Zero Value Preservation**: `duration_ms` and `tokens_used` correctly preserve 0 as valid value
+4. **Cursor Model Extraction**: ✅ **NEW** - Model info extracted from `composerData.usageData` field
+
+### 🆕 Cursor Model Discovery (December 2025)
+
+**Key Finding**: Cursor DOES store model information, just in a different location than originally expected!
+
+**Location**: `composerData.{composerId}.usageData` in `cursorDiskKV` table
+
+**Data Structure**:
+```json
+{
+  "usageData": {
+    "claude-4.5-opus-high-thinking": {
+      "costInCents": 141,
+      "amount": 23
+    }
+  }
+}
+```
+
+**Key Insight**: The model name is stored as the **KEY** of the `usageData` dictionary, not as a value!
+
+**What's Available**:
+- `model_name` - The model used (e.g., "claude-4.5-opus-high-thinking", "composer-1", "gemini-3-pro")
+- `costInCents` - Cost in cents for this model in this conversation
+- `amount` - Number of AI responses using this model
+
+**Scope**: Per-composer (conversation-level), not per-message like Claude Code
+
+**Implementation**: See `src/processing/cursor/data_extractors.py::ComposerDataExtractor._extract_model_usage()`
 
 ### ⚠️ Current Limitations
 

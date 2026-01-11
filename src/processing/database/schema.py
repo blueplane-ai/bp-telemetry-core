@@ -359,6 +359,13 @@ def create_cursor_raw_traces_table(client: SQLiteClient) -> None:
         is_archived BOOLEAN,
         has_unread_messages BOOLEAN,
 
+        -- Model usage fields (extracted from usageData in composerData)
+        -- The model name is the KEY of the usageData dictionary
+        model_name TEXT,               -- Primary model used (e.g., "claude-4.5-opus-high-thinking")
+        model_cost_cents INTEGER,      -- Cost in cents for this model
+        model_response_count INTEGER,  -- Number of AI responses using this model
+        models_used TEXT,              -- JSON array of all models if multiple used
+
         -- Full event payload (compressed)
         event_data BLOB NOT NULL,
 
@@ -398,6 +405,9 @@ def create_cursor_indexes(client: SQLiteClient) -> None:
         # Time-based partitioning
         "CREATE INDEX IF NOT EXISTS idx_cursor_date_hour ON cursor_raw_traces(event_date, event_hour);",
         "CREATE INDEX IF NOT EXISTS idx_cursor_unix_ms ON cursor_raw_traces(unix_ms DESC) WHERE unix_ms IS NOT NULL;",
+
+        # Model analysis (model_name is extracted from usageData)
+        "CREATE INDEX IF NOT EXISTS idx_cursor_model ON cursor_raw_traces(model_name) WHERE model_name IS NOT NULL;",
     ]
 
     for index_sql in indexes:
